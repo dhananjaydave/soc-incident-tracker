@@ -33,6 +33,14 @@ def _connect(db_path: str) -> sqlite3.Connection:
         )
         """
     )
+    existing_incident_columns = {row[1] for row in conn.execute("PRAGMA table_info(incidents)").fetchall()}
+    if "external_ticket_ref" not in existing_incident_columns:
+        conn.execute("ALTER TABLE incidents ADD COLUMN external_ticket_ref TEXT")
+    if "awaiting_stakeholder_reply" not in existing_incident_columns:
+        conn.execute("ALTER TABLE incidents ADD COLUMN awaiting_stakeholder_reply INTEGER NOT NULL DEFAULT 0")
+    if "affected_user" not in existing_incident_columns:
+        conn.execute("ALTER TABLE incidents ADD COLUMN affected_user TEXT")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_incidents_affected_user ON incidents(affected_user)")
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS incident_updates (
@@ -64,18 +72,55 @@ def _row_to_incident(row: sqlite3.Row) -> dict:
     return dict(row)
 
 
-def _create_incident_sync(db_path: str, alert_type: str, title: str, description: str | None) -> dict:
+def _create_incident_sync(db_path: str, alert_type: str, title: str, description: str | None,
+                           external_ticket_ref: str | None, affected_user: str | None) -> dict:
     conn = _connect(db_path)
     try:
         now = datetime.now(timezone.utc).isoformat()
         cursor = conn.execute(
-            "INSERT INTO incidents (alert_type, title, description, status, created_at, updated_at) "
-            "VALUES (?, ?, ?, 'open', ?, ?)",
-            (alert_type, title, description, now, now),
+            "INSERT INTO incidents (alert_type, title, description, status, created_at, updated_at, "
+            "external_ticket_ref, affected_user) VALUES (?, ?, ?, 'open', ?, ?, ?, ?)",
+            (alert_type, title, description, now, now, external_ticket_ref, affected_user),
         )
         conn.commit()
         row = conn.execute("SELECT * FROM incidents WHERE id = ?", (cursor.lastrowid,)).fetchone()
         return _row_to_incident(row)
+    finally:
+        conn.close()
+
+
+def _set_awaiting_stakeholder_sync(db_path: str, incident_id: int, awaiting: bool) -> bool:
+    conn = _connect(db_path)
+    try:
+        now = datetime.now(timezone.utc).isoformat()
+        cursor = conn.execute(
+            "UPDATE incidents SET awaiting_stakeholder_reply = ?, updated_at = ? WHERE id = ?",
+            (1 if awaiting else 0, now, incident_id),
+        )
+        conn.commit()
+        return cursor.rowcount > 0
+    finally:
+        conn.close()
+
+
+def _get_shift_summary_sync(db_path: str, hours: int) -> dict:
+    conn = _connect(db_path)
+    try:
+        since = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
+        rows = conn.execute("SELECT * FROM incidents WHERE created_at >= ?", (since,)).fetchall()
+        incidents = [_row_to_incident(r) for r in rows]
+
+        by_status: dict[str, int] = {}
+        for incident in incidents:
+            by_status[incident["status"]] = by_status.get(incident["status"], 0) + 1
+
+        return {
+            "window_hours": hours,
+            "total_incidents": len(incidents),
+            "by_status": by_status,
+            "with_external_ticket": sum(1 for i in incidents if i["external_ticket_ref"]),
+            "awaiting_stakeholder_reply": sum(1 for i in incidents if i["awaiting_stakeholder_reply"]),
+        }
     finally:
         conn.close()
 
@@ -161,6 +206,40 @@ def _get_stale_incidents_sync(db_path: str, hours_threshold: int) -> list[dict]:
         conn.close()
 
 
+def _get_user_history_sync(db_path: str, affected_user: str) -> list[dict]:
+    conn = _connect(db_path)
+    try:
+        rows = conn.execute(
+            "SELECT * FROM incidents WHERE affected_user = ? ORDER BY created_at DESC", (affected_user,)
+        ).fetchall()
+        return [_row_to_incident(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def _export_incidents_csv_sync(db_path: str) -> str:
+    import csv
+    import io
+
+    conn = _connect(db_path)
+    try:
+        rows = conn.execute("SELECT * FROM incidents ORDER BY created_at DESC").fetchall()
+        buffer = io.StringIO()
+        if rows:
+            writer = csv.DictWriter(buffer, fieldnames=rows[0].keys())
+            writer.writeheader()
+            for row in rows:
+                writer.writerow(dict(row))
+        else:
+            buffer.write(
+                "id,alert_type,title,description,status,disposition_reason,created_at,updated_at,"
+                "resolved_at,external_ticket_ref,awaiting_stakeholder_reply,affected_user\n"
+            )
+        return buffer.getvalue()
+    finally:
+        conn.close()
+
+
 def _upsert_sop_sync(db_path: str, alert_type: str, steps: str) -> None:
     conn = _connect(db_path)
     try:
@@ -197,8 +276,23 @@ class TrackerDB:
     def __init__(self, db_path: str | None = None) -> None:
         self.db_path = db_path or DEFAULT_DB_PATH
 
-    async def create_incident(self, alert_type: str, title: str, description: str | None = None) -> dict:
-        return await asyncio.to_thread(_create_incident_sync, self.db_path, alert_type, title, description)
+    async def create_incident(self, alert_type: str, title: str, description: str | None = None,
+                               external_ticket_ref: str | None = None, affected_user: str | None = None) -> dict:
+        return await asyncio.to_thread(
+            _create_incident_sync, self.db_path, alert_type, title, description, external_ticket_ref, affected_user
+        )
+
+    async def set_awaiting_stakeholder(self, incident_id: int, awaiting: bool) -> bool:
+        return await asyncio.to_thread(_set_awaiting_stakeholder_sync, self.db_path, incident_id, awaiting)
+
+    async def get_shift_summary(self, hours: int = 8) -> dict:
+        return await asyncio.to_thread(_get_shift_summary_sync, self.db_path, hours)
+
+    async def get_user_history(self, affected_user: str) -> list[dict]:
+        return await asyncio.to_thread(_get_user_history_sync, self.db_path, affected_user)
+
+    async def export_incidents_csv(self) -> str:
+        return await asyncio.to_thread(_export_incidents_csv_sync, self.db_path)
 
     async def get_incident(self, incident_id: int) -> dict | None:
         return await asyncio.to_thread(_get_incident_sync, self.db_path, incident_id)

@@ -32,6 +32,7 @@ HELP_TEXT = (
     "/escalate <id> <reason> - mark escalated\n"
     "/note <id> <text> - add an update note\n"
     "/sop <alert type> - show the SOP for that alert type\n"
+    "/summary [hours] - shift summary (defaults to 8h)\n"
     "/help - show this message"
 )
 
@@ -101,6 +102,31 @@ async def _handle_sop(db: TrackerDB, args: str) -> str:
     return f"SOP for {alert_type}:\n{sop['steps']}"
 
 
+DEFAULT_SHIFT_HOURS = 8
+
+
+async def _handle_summary(db: TrackerDB, args: str) -> str:
+    hours = DEFAULT_SHIFT_HOURS
+    if args.strip():
+        try:
+            hours = int(args.strip())
+        except ValueError:
+            return "Usage: /summary [hours] (defaults to 8 if omitted)"
+
+    summary = await db.get_shift_summary(hours=hours)
+    if summary["total_incidents"] == 0:
+        return f"No incidents in the last {hours}h."
+
+    status_lines = "\n".join(f"  {status}: {count}" for status, count in summary["by_status"].items())
+    return (
+        f"Shift summary (last {hours}h):\n"
+        f"Total incidents: {summary['total_incidents']}\n"
+        f"{status_lines}\n"
+        f"With an external ticket: {summary['with_external_ticket']}\n"
+        f"Awaiting stakeholder reply: {summary['awaiting_stakeholder_reply']}"
+    )
+
+
 async def handle_command(db: TrackerDB, text: str) -> str:
     text = text.strip()
     if not text.startswith("/"):
@@ -124,6 +150,8 @@ async def handle_command(db: TrackerDB, text: str) -> str:
         return await _handle_note(db, args)
     if command == "sop":
         return await _handle_sop(db, args)
+    if command == "summary":
+        return await _handle_summary(db, args)
     return f"Unknown command '{command}'. Send /help for commands."
 
 

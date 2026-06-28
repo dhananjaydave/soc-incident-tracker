@@ -40,9 +40,26 @@ def test_session_token_roundtrip():
 
 
 def test_tampered_session_token_rejected():
+    # Flipping a character in the middle (the signature segment), not the
+    # very last character - base64url's trailing bits can be padding that
+    # doesn't affect the decoded value, which made this test flaky (a
+    # "tampered" token could coincidentally decode identically).
     token = auth.create_session_token("admin")
-    tampered = token[:-1] + ("a" if token[-1] != "a" else "b")
+    mid = len(token) // 2
+    tampered = token[:mid] + ("a" if token[mid] != "a" else "b") + token[mid + 1:]
     assert auth.verify_session_token(tampered) is None
+
+
+def test_forged_payload_rejected():
+    """Swap in a different (validly-encoded) payload segment without the
+    matching signature - confirms the signature is actually checked
+    against the payload, not just present."""
+    legit_token = auth.create_session_token("admin")
+    forged_token = auth.create_session_token("attacker")
+    payload_segment, _, signature_segment = forged_token.rpartition(".")
+    _, _, legit_signature = legit_token.rpartition(".")
+    franken_token = f"{payload_segment}.{legit_signature}"
+    assert auth.verify_session_token(franken_token) is None
 
 
 def test_none_token_rejected():

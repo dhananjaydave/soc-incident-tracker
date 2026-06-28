@@ -132,3 +132,120 @@ async def test_list_sops(db):
     await db.upsert_sop("System Compromise", "steps b")
     sops = await db.list_sops()
     assert len(sops) == 2
+
+
+async def test_create_incident_with_external_ticket_ref(db):
+    incident = await db.create_incident("Phishing", "test", external_ticket_ref="INC0012345")
+    assert incident["external_ticket_ref"] == "INC0012345"
+
+
+async def test_create_incident_without_external_ticket_ref_is_none(db):
+    incident = await db.create_incident("Phishing", "test")
+    assert incident["external_ticket_ref"] is None
+
+
+async def test_awaiting_stakeholder_defaults_false(db):
+    incident = await db.create_incident("Phishing", "test")
+    assert incident["awaiting_stakeholder_reply"] == 0
+
+
+async def test_set_awaiting_stakeholder(db):
+    incident = await db.create_incident("Phishing", "test")
+    await db.set_awaiting_stakeholder(incident["id"], True)
+    fetched = await db.get_incident(incident["id"])
+    assert fetched["awaiting_stakeholder_reply"] == 1
+    await db.set_awaiting_stakeholder(incident["id"], False)
+    fetched = await db.get_incident(incident["id"])
+    assert fetched["awaiting_stakeholder_reply"] == 0
+
+
+async def test_set_awaiting_stakeholder_missing_incident_returns_false(db):
+    result = await db.set_awaiting_stakeholder(99999, True)
+    assert result is False
+
+
+async def test_shift_summary_empty(db):
+    summary = await db.get_shift_summary(hours=8)
+    assert summary["total_incidents"] == 0
+    assert summary["by_status"] == {}
+    assert summary["with_external_ticket"] == 0
+    assert summary["awaiting_stakeholder_reply"] == 0
+
+
+async def test_shift_summary_counts_correctly(db):
+    a = await db.create_incident("Phishing", "a", external_ticket_ref="INC001")
+    b = await db.create_incident("System Compromise", "b")
+    await db.update_status(b["id"], "escalated")
+    await db.set_awaiting_stakeholder(a["id"], True)
+
+    summary = await db.get_shift_summary(hours=8)
+    assert summary["total_incidents"] == 2
+    assert summary["by_status"]["open"] == 1
+    assert summary["by_status"]["escalated"] == 1
+    assert summary["with_external_ticket"] == 1
+    assert summary["awaiting_stakeholder_reply"] == 1
+
+
+async def test_create_incident_with_affected_user(db):
+    incident = await db.create_incident("Phishing", "test", affected_user="jdoe")
+    assert incident["affected_user"] == "jdoe"
+
+
+async def test_get_user_history_returns_only_that_users_incidents(db):
+    await db.create_incident("Phishing", "a", affected_user="jdoe")
+    await db.create_incident("Brute Force", "b", affected_user="jdoe")
+    await db.create_incident("System Compromise", "c", affected_user="asmith")
+
+    history = await db.get_user_history("jdoe")
+    assert len(history) == 2
+    assert all(i["affected_user"] == "jdoe" for i in history)
+
+
+async def test_get_user_history_empty_for_unknown_user(db):
+    await db.create_incident("Phishing", "a", affected_user="jdoe")
+    history = await db.get_user_history("nosuchuser")
+    assert history == []
+
+
+async def test_export_csv_empty_db_has_header_only(db):
+    csv_text = await db.export_incidents_csv()
+    lines = csv_text.strip().splitlines()
+    assert len(lines) == 1
+    assert "alert_type" in lines[0]
+
+
+async def test_export_csv_includes_incident_data(db):
+    await db.create_incident("Phishing", "Suspicious email", affected_user="jdoe")
+    csv_text = await db.export_incidents_csv()
+    assert "Phishing" in csv_text
+    assert "Suspicious email" in csv_text
+    assert "jdoe" in csv_text
+
+
+async def test_export_csv_is_parseable(db):
+    import csv as csv_module
+    import io
+    await db.create_incident("Phishing", "test, with a comma", affected_user="jdoe")
+    csv_text = await db.export_incidents_csv()
+    reader = csv_module.DictReader(io.StringIO(csv_text))
+    rows = list(reader)
+    assert len(rows) == 1
+    assert rows[0]["title"] == "test, with a comma"
+
+
+async def test_shift_summary_excludes_incidents_outside_window():
+    import sqlite3
+    from datetime import datetime, timedelta, timezone
+    with tempfile.TemporaryDirectory() as tmp:
+        db_path = str(Path(tmp) / "test.db")
+        db = TrackerDB(db_path=db_path)
+        await db.create_incident("Phishing", "old one")
+
+        old_time = (datetime.now(timezone.utc) - timedelta(hours=48)).isoformat()
+        conn = sqlite3.connect(db_path)
+        conn.execute("UPDATE incidents SET created_at = ?", (old_time,))
+        conn.commit()
+        conn.close()
+
+        summary = await db.get_shift_summary(hours=8)
+        assert summary["total_incidents"] == 0

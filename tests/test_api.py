@@ -157,6 +157,77 @@ def test_get_nonexistent_incident_404(client):
     assert resp.status_code == 404
 
 
+def test_create_incident_with_affected_user(client):
+    _login(client)
+    resp = client.post("/api/incidents", json={"alert_type": "Phishing", "title": "test", "affected_user": "jdoe"})
+    assert resp.json()["incident"]["affected_user"] == "jdoe"
+
+
+def test_user_history(client):
+    _login(client)
+    client.post("/api/incidents", json={"alert_type": "Phishing", "title": "a", "affected_user": "jdoe"})
+    client.post("/api/incidents", json={"alert_type": "Brute Force", "title": "b", "affected_user": "other"})
+    resp = client.get("/api/users/jdoe/history")
+    history = resp.json()
+    assert len(history) == 1
+    assert history[0]["affected_user"] == "jdoe"
+
+
+def test_user_history_requires_auth(client):
+    resp = client.get("/api/users/jdoe/history")
+    assert resp.status_code == 401
+
+
+def test_export_csv_route_not_shadowed_by_incident_id_route(client):
+    """/api/incidents/export must resolve to the export route, not get
+    captured by /api/incidents/{incident_id} trying (and failing) to
+    parse 'export' as an int."""
+    _login(client)
+    resp = client.get("/api/incidents/export")
+    assert resp.status_code == 200
+    assert resp.headers["content-type"].startswith("text/csv")
+
+
+def test_export_csv_contains_created_incident(client):
+    _login(client)
+    client.post("/api/incidents", json={"alert_type": "Phishing", "title": "Exported ticket"})
+    resp = client.get("/api/incidents/export")
+    assert "Exported ticket" in resp.text
+
+
+def test_export_csv_requires_auth(client):
+    resp = client.get("/api/incidents/export")
+    assert resp.status_code == 401
+
+
+def test_summary_endpoint(client):
+    _login(client)
+    client.post("/api/incidents", json={"alert_type": "Phishing", "title": "test"})
+    resp = client.get("/api/summary")
+    assert resp.json()["total_incidents"] == 1
+
+
+def test_summary_clamps_extreme_hours_values(client):
+    _login(client)
+    resp = client.get("/api/summary", params={"hours": 999999})
+    assert resp.status_code == 200  # clamped server-side, not rejected
+
+
+def test_set_awaiting_stakeholder(client):
+    _login(client)
+    created = client.post("/api/incidents", json={"alert_type": "Phishing", "title": "test"}).json()["incident"]
+    resp = client.post(f"/api/incidents/{created['id']}/awaiting-stakeholder", json={"awaiting": True})
+    assert resp.status_code == 200
+    fetched = client.get(f"/api/incidents/{created['id']}").json()["incident"]
+    assert fetched["awaiting_stakeholder_reply"] == 1
+
+
+def test_set_awaiting_stakeholder_nonexistent_incident(client):
+    _login(client)
+    resp = client.post("/api/incidents/99999/awaiting-stakeholder", json={"awaiting": True})
+    assert resp.status_code == 404
+
+
 def test_update_status(client):
     _login(client)
     created = client.post("/api/incidents", json={"alert_type": "Brute Force", "title": "test"}).json()["incident"]
@@ -207,6 +278,44 @@ def test_get_sop_for_unregistered_type_404(client):
     _login(client)
     resp = client.get("/api/sops/Nonexistent")
     assert resp.status_code == 404
+
+
+def test_mitre_list(client):
+    _login(client)
+    resp = client.get("/api/mitre")
+    assert resp.status_code == 200
+    assert len(resp.json()) > 0
+
+
+def test_mitre_list_requires_auth(client):
+    resp = client.get("/api/mitre")
+    assert resp.status_code == 401
+
+
+def test_mitre_detail_found(client):
+    _login(client)
+    resp = client.get("/api/mitre/T1055")
+    assert resp.json()["name"] == "Process Injection"
+
+
+def test_mitre_detail_not_found(client):
+    _login(client)
+    resp = client.get("/api/mitre/T9999")
+    assert resp.status_code == 404
+
+
+def test_feed_requires_auth(client):
+    resp = client.get("/api/feed")
+    assert resp.status_code == 401
+
+
+def test_feed_returns_results(client):
+    _login(client)
+    fake_result = [{"source": "Test Source", "status": "ok", "entries": [{"title": "x", "link": "y", "published": "z"}]}]
+    with patch("tracker.api.fetch_all_feeds", new_callable=AsyncMock, return_value=fake_result):
+        resp = client.get("/api/feed")
+    assert resp.status_code == 200
+    assert resp.json() == fake_result
 
 
 def test_telegram_webhook_wrong_secret_rejected(client, monkeypatch):

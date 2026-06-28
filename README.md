@@ -4,8 +4,13 @@ A private, login-gated personal case-tracking dashboard - log every alert
 you acknowledge, work through a per-alert-type SOP, and dispose of it
 (escalate / resolve / false positive) with a Tines-style dropdown-driven
 workflow. Bidirectional Telegram bot included - acknowledge, close, or
-escalate tickets without opening the dashboard, and get pinged if a
-ticket goes stale.
+escalate tickets without opening the dashboard, get a shift summary
+on demand, and get pinged if a ticket goes stale or someone logs in.
+
+Also includes a MITRE ATT&CK quick-reference knowledge tab (curated
+practical triage notes, not just technique IDs), a security news feed
+from a handful of free sources, per-user incident history, and CSV
+export.
 
 This is the personal, single-user counterpart to the other four tools in
 this portfolio - it's not connected to any real employer's Tines/Splunk
@@ -38,9 +43,18 @@ person's actual day-to-day case tracking, not a public demo.
 - **`telegram_bot.py`** - private, allowlisted-chat-id bot (same pattern
   as the Amul/Phishing bots elsewhere in this portfolio). `/tickets`,
   `/close <id> <note>`, `/escalate <id> <reason>`, `/falsepositive <id>
-  <reason>`, `/note <id> <text>`, `/sop <alert type>`.
+  <reason>`, `/note <id> <text>`, `/sop <alert type>`, `/summary [hours]`.
+  Also pings on every dashboard login and on login-rate-limit triggers
+  (deduplicated to once per window, not once per blocked attempt).
 - **`scheduler.py`** - periodic check for tickets with no update in N
   hours (default 24), pings Telegram so nothing silently sits forgotten.
+- **`mitre_knowledge.py`** - curated practical reference for 21 MITRE
+  ATT&CK techniques most likely to show up in real alerts - what it looks
+  like, common false positives, what to do next. Written as triage notes,
+  not a copy of MITRE's own site.
+- **`security_feed.py`** - aggregates 4 free, no-API-key security news
+  RSS feeds (Krebs, The Hacker News, BleepingComputer, SANS ISC), cached
+  30 minutes so the dashboard isn't hammering them on every load.
 - **`api.py`** - FastAPI app, everything under `/api/*` requires a valid
   session.
 

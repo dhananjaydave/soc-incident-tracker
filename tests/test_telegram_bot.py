@@ -116,6 +116,30 @@ async def test_sop_missing_args(db):
     assert "Usage" in reply
 
 
+async def test_summary_empty(db):
+    reply = await telegram_bot.handle_command(db, "/summary")
+    assert "No incidents in the last 8h" in reply
+
+
+async def test_summary_default_window(db):
+    await db.create_incident("Phishing", "test", external_ticket_ref="INC001")
+    reply = await telegram_bot.handle_command(db, "/summary")
+    assert "Total incidents: 1" in reply
+    assert "open: 1" in reply
+    assert "With an external ticket: 1" in reply
+
+
+async def test_summary_custom_window(db):
+    await db.create_incident("Phishing", "test")
+    reply = await telegram_bot.handle_command(db, "/summary 24")
+    assert "last 24h" in reply
+
+
+async def test_summary_invalid_window(db):
+    reply = await telegram_bot.handle_command(db, "/summary notanumber")
+    assert "Usage" in reply
+
+
 def test_is_authorized(monkeypatch):
     monkeypatch.setattr(telegram_bot, "ALLOWED_CHAT_IDS", {"944650675"})
     assert telegram_bot.is_authorized("944650675") is True
