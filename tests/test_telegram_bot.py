@@ -38,7 +38,7 @@ async def test_tickets_lists_open_and_escalated_not_resolved(db):
     escalated_t = await db.create_incident("System Compromise", "Escalated one")
     await db.update_status(escalated_t["id"], "escalated")
     resolved_t = await db.create_incident("Brute Force", "Resolved one")
-    await db.update_status(resolved_t["id"], "resolved")
+    await db.update_status(resolved_t["id"], "resolved", "Confirmed benign")
 
     reply = await telegram_bot.handle_command(db, "/tickets")
     assert f"#{open_t['id']}" in reply

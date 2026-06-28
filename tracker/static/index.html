@@ -120,6 +120,31 @@
   .feed-entry a { color: var(--text); text-decoration: none; }
   .feed-entry a:hover { color: var(--accent); }
 
+  .rule-detail { background: #070a12; border: 1px solid var(--border); border-radius: 9px; padding: 1rem; margin: 0.6rem 0 1rem; font-size: 0.85rem; }
+  .rule-detail .cat-badge { font-family: var(--mono); font-size: 0.7rem; color: var(--info); background: rgba(56,189,248,0.1); padding: 0.15rem 0.5rem; border-radius: 100px; display: inline-block; margin-bottom: 0.6rem; }
+  .rule-detail h4 { font-size: 0.74rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--accent); margin: 0.9rem 0 0.35rem; }
+  .rule-detail h4:first-of-type { margin-top: 0; }
+  .rule-detail ul { margin: 0; padding-left: 1.2rem; }
+  .rule-detail li { margin-bottom: 0.25rem; }
+  .rule-detail .splunk-box { font-family: var(--mono); font-size: 0.78rem; background: #050810; border: 1px solid var(--border); border-radius: 6px; padding: 0.5rem 0.7rem; overflow-x: auto; }
+
+  .toast { position: fixed; bottom: 1.5rem; right: 1.5rem; max-width: 360px; padding: 0.8rem 1.1rem; border-radius: 9px; font-size: 0.85rem; z-index: 999; box-shadow: 0 8px 24px rgba(0,0,0,0.4); display: none; }
+  .toast.error { background: #2a0d0d; border: 1px solid var(--malicious); color: #fecaca; }
+  .toast.ok { background: #0d2a1a; border: 1px solid var(--clean); color: #bbf7d0; }
+
+  .investigate-result { background: #070a12; border: 1px solid var(--border); border-radius: 9px; padding: 1rem; margin-top: 1rem; font-size: 0.84rem; }
+  .investigate-result .verdict { font-family: var(--mono); font-size: 0.78rem; padding: 0.2rem 0.6rem; border-radius: 100px; text-transform: uppercase; display: inline-block; margin-bottom: 0.6rem; }
+  .verdict-malicious, .verdict-phishing { background: rgba(248,113,113,0.15); color: var(--malicious); }
+  .verdict-suspicious { background: rgba(251,191,36,0.15); color: var(--suspicious); }
+  .verdict-clean, .verdict-likely_legitimate { background: rgba(52,211,153,0.15); color: var(--clean); }
+  .verdict-unknown { background: rgba(124,138,163,0.15); color: var(--text-dim); }
+  .investigate-result pre { white-space: pre-wrap; font-family: var(--mono); font-size: 0.78rem; margin: 0; }
+  .evidence-item { padding: 0.4rem 0; border-bottom: 1px solid var(--border); font-size: 0.82rem; }
+  .evidence-item:last-child { border-bottom: none; }
+  .sev-tag { font-family: var(--mono); font-size: 0.68rem; text-transform: uppercase; margin-right: 0.4rem; }
+  .sev-malicious { color: var(--malicious); } .sev-suspicious { color: var(--suspicious); } .sev-info { color: var(--info); }
+  input[type="file"] { padding: 0.4rem; }
+
   .links { display: flex; gap: 1rem; flex-wrap: wrap; }
   .links a {
     color: var(--text); text-decoration: none; font-weight: 500; font-size: 0.85rem;
@@ -155,16 +180,19 @@
         <p class="lede">Logged in as <span id="whoami"></span></p>
       </div>
       <div style="display:flex; gap:0.6rem;">
-        <button class="secondary" id="export-btn">Export CSV</button>
+        <button class="secondary" id="export-csv-btn">Export CSV</button>
+        <button class="secondary" id="export-pdf-btn">Export PDF</button>
         <button class="secondary" id="logout-btn">Log out</button>
       </div>
     </div>
 
     <div class="tab-nav">
       <button class="tab-btn active" data-tab="tickets">Tickets</button>
+      <button class="tab-btn" data-tab="investigate">Investigate</button>
       <button class="tab-btn" data-tab="knowledge">MITRE Knowledge</button>
       <button class="tab-btn" data-tab="feed">Security Feed</button>
       <button class="tab-btn" data-tab="users">User History</button>
+      <button class="tab-btn" data-tab="settings">Settings</button>
     </div>
 
     <div class="tab-content active" id="tab-tickets">
@@ -193,6 +221,7 @@
             <textarea id="create-description" style="min-height:60px;"></textarea>
             <button type="submit">Create ticket</button>
           </form>
+          <div id="create-rule-preview"></div>
         </div>
 
         <div class="panel">
@@ -208,10 +237,16 @@
         </div>
 
         <div class="panel">
-          <h2>SOPs</h2>
+          <h2>Rule Book / SOPs</h2>
+          <p class="lede" style="margin-bottom:1rem;">Every rule below auto-fills investigation steps, required fields, Splunk hints, and a closure checklist when selected for a new ticket.</p>
           <form id="sop-form">
             <div class="field-grid">
-              <div><label>Alert type</label><input id="sop-alert-type" required></div>
+              <div><label>Alert type / rule name</label><input id="sop-alert-type" required></div>
+              <div><label>SOP category (optional)</label>
+                <select id="sop-category">
+                  <option value="">(none)</option>
+                </select>
+              </div>
             </div>
             <label>Steps</label>
             <textarea id="sop-steps" required></textarea>
@@ -233,7 +268,7 @@
           </div>
           <div id="detail-sop-wrap" style="display:none;">
             <label>SOP for this alert type</label>
-            <div class="sop-box" id="detail-sop"></div>
+            <div id="detail-sop"></div>
           </div>
           <div class="action-row">
             <button id="action-escalate">Escalate</button>
@@ -286,9 +321,62 @@
       </div>
     </div>
 
+    <div class="tab-content" id="tab-investigate">
+      <div class="panel">
+        <h2>IOC lookup</h2>
+        <p class="lede" style="margin-bottom:1rem;">Check an IP, domain, hash, or URL against the IOC Enrichment service.</p>
+        <form id="ioc-form">
+          <div class="field-grid">
+            <div><label>Indicator</label><input id="ioc-indicator" placeholder="1.2.3.4 / evil.com / sha256 hash" required></div>
+          </div>
+          <button type="submit">Look up</button>
+        </form>
+        <div id="ioc-result"></div>
+      </div>
+
+      <div class="panel">
+        <h2>Phishing email analysis</h2>
+        <p class="lede" style="margin-bottom:1rem;">Paste raw email content/headers, or upload an .eml file.</p>
+        <form id="phishing-form">
+          <label>Raw email text (headers + body)</label>
+          <textarea id="phishing-raw-text" style="min-height:100px;" placeholder="Paste full email source here..."></textarea>
+          <label>...or upload an .eml file</label>
+          <input type="file" id="phishing-file" accept=".eml,message/rfc822">
+          <button type="submit">Analyze</button>
+        </form>
+        <div id="phishing-result"></div>
+      </div>
+
+      <div class="panel">
+        <h2>File analysis</h2>
+        <p class="lede" style="margin-bottom:1rem;">Upload a file for static analysis (hashes, file type, PE info, strings, IOC enrichment of contained indicators).</p>
+        <form id="file-form">
+          <label>File</label>
+          <input type="file" id="file-upload" required>
+          <button type="submit">Analyze</button>
+        </form>
+        <div id="file-result"></div>
+      </div>
+    </div>
+
+    <div class="tab-content" id="tab-settings">
+      <div class="panel" style="max-width:420px;">
+        <h2>Change password</h2>
+        <form id="change-password-form">
+          <label>Current password</label>
+          <input type="password" id="cp-current" autocomplete="current-password" required>
+          <label>New password (min. 12 characters)</label>
+          <input type="password" id="cp-new" autocomplete="new-password" minlength="12" required>
+          <button type="submit">Change password</button>
+        </form>
+      </div>
+    </div>
+
   </div>
 
 </div>
+
+<div class="toast" id="toast"></div>
 
 <script>
   const loginView = document.getElementById('login-view');
@@ -298,8 +386,28 @@
 
   function clearChildren(el) { while (el.firstChild) el.removeChild(el.firstChild); }
 
+  let toastTimer = null;
+  function showToast(message, isError) {
+    const toast = document.getElementById('toast');
+    toast.textContent = message;
+    toast.className = 'toast ' + (isError ? 'error' : 'ok');
+    toast.style.display = 'block';
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => { toast.style.display = 'none'; }, 5000);
+  }
+
   async function api(path, options = {}) {
     const resp = await fetch(path, { ...options, headers: { 'Content-Type': 'application/json', ...(options.headers || {}) } });
+    if (resp.status === 401) { showLogin(); throw new Error('Not authenticated'); }
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok) throw new Error(data.detail || `Error ${resp.status}`);
+    return data;
+  }
+
+  // For multipart/form-data requests (file uploads) - no Content-Type header,
+  // the browser sets the correct multipart boundary itself.
+  async function apiUpload(path, formData) {
+    const resp = await fetch(path, { method: 'POST', body: formData });
     if (resp.status === 401) { showLogin(); throw new Error('Not authenticated'); }
     const data = await resp.json().catch(() => ({}));
     if (!resp.ok) throw new Error(data.detail || `Error ${resp.status}`);
@@ -316,6 +424,7 @@
     dashboardView.style.display = 'block';
     const me = await api('/api/me');
     document.getElementById('whoami').textContent = me.username;
+    await loadRuleBookCategories();
     await loadSops();
     await loadTickets('');
     await loadSummary();
@@ -361,12 +470,74 @@
   });
 
   // --- Export ---
-  document.getElementById('export-btn').addEventListener('click', () => {
+  document.getElementById('export-csv-btn').addEventListener('click', () => {
     window.location.href = '/api/incidents/export';
   });
+  document.getElementById('export-pdf-btn').addEventListener('click', () => {
+    window.location.href = '/api/incidents/export/pdf';
+  });
 
-  // --- SOPs / alert type dropdown ---
+  // --- Rule Book / SOPs ---
   let sopCache = [];
+
+  async function loadRuleBookCategories() {
+    const categories = await api('/api/rule-book/categories');
+    const select = document.getElementById('sop-category');
+    clearChildren(select);
+    const noneOpt = document.createElement('option'); noneOpt.value = ''; noneOpt.textContent = '(none)';
+    select.appendChild(noneOpt);
+    for (const cat of categories) {
+      const opt = document.createElement('option');
+      opt.value = `${cat.id}: ${cat.name}`;
+      opt.textContent = `${cat.id}: ${cat.name}`;
+      select.appendChild(opt);
+    }
+  }
+
+  function appendListSection(container, label, items) {
+    if (!items || items.length === 0) return;
+    const h4 = document.createElement('h4'); h4.textContent = label;
+    const ul = document.createElement('ul');
+    for (const item of items) {
+      const li = document.createElement('li'); li.textContent = item;
+      ul.appendChild(li);
+    }
+    container.appendChild(h4); container.appendChild(ul);
+  }
+
+  function renderRuleDetail(sop) {
+    const container = document.createElement('div');
+    container.className = 'rule-detail';
+    if (sop.category) {
+      const cat = document.createElement('span'); cat.className = 'cat-badge'; cat.textContent = sop.category;
+      container.appendChild(cat);
+    }
+    const s = sop.structured;
+    if (s && s.investigation_steps && s.investigation_steps.length) {
+      appendListSection(container, 'Investigation steps', s.investigation_steps);
+    } else {
+      const h4 = document.createElement('h4'); h4.textContent = 'Steps';
+      const pre = document.createElement('pre'); pre.textContent = sop.steps;
+      container.appendChild(h4); container.appendChild(pre);
+    }
+    if (s) {
+      appendListSection(container, 'Required fields', s.required_fields);
+      if (s.escalation_criteria) {
+        const h4 = document.createElement('h4'); h4.textContent = 'Escalation criteria';
+        const p = document.createElement('p'); p.style.margin = '0'; p.textContent = s.escalation_criteria;
+        container.appendChild(h4); container.appendChild(p);
+      }
+      if (s.splunk_query_hint) {
+        const h4 = document.createElement('h4'); h4.textContent = 'Splunk query hint';
+        const box = document.createElement('div'); box.className = 'splunk-box'; box.textContent = s.splunk_query_hint;
+        container.appendChild(h4); container.appendChild(box);
+      }
+      appendListSection(container, 'Containment actions', s.containment_actions);
+      appendListSection(container, 'Closure checklist', s.closure_checklist);
+      appendListSection(container, 'False positive indicators', s.false_positive_indicators);
+    }
+    return container;
+  }
 
   async function loadSops() {
     sopCache = await api('/api/sops');
@@ -382,10 +553,26 @@
     clearChildren(sopList);
     for (const sop of sopCache) {
       const li = document.createElement('li');
-      li.textContent = sop.alert_type;
+      li.textContent = sop.category ? `${sop.alert_type}` : sop.alert_type;
+      if (sop.category) {
+        const badge = document.createElement('span');
+        badge.className = 'tag-badge'; badge.style.marginLeft = '0.5rem'; badge.textContent = sop.category.split(':')[0];
+        li.appendChild(badge);
+      }
       sopList.appendChild(li);
     }
+    updateCreateRulePreview();
   }
+
+  function updateCreateRulePreview() {
+    const alertType = document.getElementById('create-alert-type').value;
+    const preview = document.getElementById('create-rule-preview');
+    clearChildren(preview);
+    const sop = sopCache.find(s => s.alert_type === alertType);
+    if (sop) preview.appendChild(renderRuleDetail(sop));
+  }
+
+  document.getElementById('create-alert-type').addEventListener('change', updateCreateRulePreview);
 
   document.getElementById('sop-form').addEventListener('submit', async (e) => {
     e.preventDefault();
@@ -394,6 +581,7 @@
       body: JSON.stringify({
         alert_type: document.getElementById('sop-alert-type').value,
         steps: document.getElementById('sop-steps').value,
+        category: document.getElementById('sop-category').value || null,
       }),
     });
     document.getElementById('sop-form').reset();
@@ -468,19 +656,25 @@
 
   document.getElementById('create-form').addEventListener('submit', async (e) => {
     e.preventDefault();
-    await api('/api/incidents', {
-      method: 'POST',
-      body: JSON.stringify({
-        alert_type: document.getElementById('create-alert-type').value,
-        title: document.getElementById('create-title').value,
-        description: document.getElementById('create-description').value || null,
-        affected_user: document.getElementById('create-user').value || null,
-        external_ticket_ref: document.getElementById('create-external-ref').value || null,
-      }),
-    });
-    document.getElementById('create-form').reset();
-    await loadTickets(currentFilter);
-    await loadSummary();
+    try {
+      await api('/api/incidents', {
+        method: 'POST',
+        body: JSON.stringify({
+          alert_type: document.getElementById('create-alert-type').value,
+          title: document.getElementById('create-title').value,
+          description: document.getElementById('create-description').value || null,
+          affected_user: document.getElementById('create-user').value || null,
+          external_ticket_ref: document.getElementById('create-external-ref').value || null,
+        }),
+      });
+      document.getElementById('create-form').reset();
+      clearChildren(document.getElementById('create-rule-preview'));
+      await loadTickets(currentFilter);
+      await loadSummary();
+      showToast('Ticket created.', false);
+    } catch (err) {
+      showToast(err.message, true);
+    }
   });
 
   let currentTicketId = null;
@@ -502,7 +696,9 @@
     const sopWrap = document.getElementById('detail-sop-wrap');
     if (data.sop) {
       sopWrap.style.display = 'block';
-      document.getElementById('detail-sop').textContent = data.sop.steps;
+      const sopBox = document.getElementById('detail-sop');
+      clearChildren(sopBox);
+      sopBox.appendChild(renderRuleDetail(data.sop));
     } else {
       sopWrap.style.display = 'none';
     }
@@ -538,11 +734,16 @@
     if (status !== 'open') {
       reason = prompt(`Reason for marking this ${status.replace('_', ' ')}?`) || null;
     }
-    await api(`/api/incidents/${currentTicketId}/status`, {
-      method: 'POST', body: JSON.stringify({ status, reason }),
-    });
-    await showDetail(currentTicketId);
-    await loadSummary();
+    try {
+      await api(`/api/incidents/${currentTicketId}/status`, {
+        method: 'POST', body: JSON.stringify({ status, reason }),
+      });
+      await showDetail(currentTicketId);
+      await loadSummary();
+      showToast(`Ticket marked ${status.replace('_', ' ')}.`, false);
+    } catch (err) {
+      showToast(err.message, true);
+    }
   }
 
   document.getElementById('action-escalate').addEventListener('click', () => setStatus('escalated'));
@@ -669,6 +870,103 @@
         showDetail(t.id);
       });
       list.appendChild(li);
+    }
+  });
+
+  // --- Investigate: shared result renderer for IOC/phishing/file results ---
+  function renderInvestigateResult(result) {
+    const box = document.createElement('div');
+    box.className = 'investigate-result';
+    if (result.verdict) {
+      const verdict = document.createElement('span');
+      verdict.className = 'verdict verdict-' + String(result.verdict).replace(/\s+/g, '_');
+      verdict.textContent = result.verdict;
+      box.appendChild(verdict);
+    }
+    if (Array.isArray(result.evidence) && result.evidence.length) {
+      for (const ev of result.evidence) {
+        const div = document.createElement('div');
+        div.className = 'evidence-item';
+        const sev = document.createElement('span');
+        sev.className = 'sev-tag sev-' + (ev.severity || 'info');
+        sev.textContent = ev.severity || 'info';
+        div.appendChild(sev);
+        div.appendChild(document.createTextNode(`[${ev.category}] ${ev.description}`));
+        box.appendChild(div);
+      }
+    }
+    const pre = document.createElement('pre');
+    pre.textContent = JSON.stringify(result, null, 2);
+    box.appendChild(pre);
+    return box;
+  }
+
+  document.getElementById('ioc-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const indicator = document.getElementById('ioc-indicator').value.trim();
+    const resultBox = document.getElementById('ioc-result');
+    clearChildren(resultBox);
+    try {
+      const result = await api(`/api/investigate/ioc?indicator=${encodeURIComponent(indicator)}`);
+      resultBox.appendChild(renderInvestigateResult(result));
+    } catch (err) {
+      showToast(err.message, true);
+    }
+  });
+
+  document.getElementById('phishing-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const rawText = document.getElementById('phishing-raw-text').value.trim();
+    const fileInput = document.getElementById('phishing-file');
+    const resultBox = document.getElementById('phishing-result');
+    clearChildren(resultBox);
+    if (!rawText && !fileInput.files.length) {
+      showToast('Provide raw email text or an .eml file.', true);
+      return;
+    }
+    const formData = new FormData();
+    if (rawText) formData.append('raw_text', rawText);
+    if (fileInput.files.length) formData.append('file', fileInput.files[0]);
+    try {
+      const result = await apiUpload('/api/investigate/phishing', formData);
+      resultBox.appendChild(renderInvestigateResult(result));
+    } catch (err) {
+      showToast(err.message, true);
+    }
+  });
+
+  document.getElementById('file-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const fileInput = document.getElementById('file-upload');
+    const resultBox = document.getElementById('file-result');
+    clearChildren(resultBox);
+    if (!fileInput.files.length) return;
+    const formData = new FormData();
+    formData.append('file', fileInput.files[0]);
+    try {
+      const result = await apiUpload('/api/investigate/file', formData);
+      resultBox.appendChild(renderInvestigateResult(result));
+    } catch (err) {
+      showToast(err.message, true);
+    }
+  });
+
+  // --- Settings: change password ---
+  document.getElementById('change-password-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const form = e.target;
+    try {
+      await api('/api/change-password', {
+        method: 'POST',
+        body: JSON.stringify({
+          current_password: document.getElementById('cp-current').value,
+          new_password: document.getElementById('cp-new').value,
+        }),
+      });
+      form.reset();
+      showToast('Password changed successfully.', false);
+    } catch (err) {
+      showToast(err.message, true);
     }
   });
 

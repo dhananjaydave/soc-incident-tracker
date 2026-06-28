@@ -10,7 +10,7 @@ import os
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 from .db import TrackerDB
-from .telegram_bot import notify_all
+from .notifications import notify
 
 STALE_HOURS_THRESHOLD = int(os.environ.get("TRACKER_STALE_HOURS", "24"))
 CHECK_INTERVAL_MINUTES = int(os.environ.get("TRACKER_CHECK_INTERVAL_MINUTES", "60"))
@@ -21,9 +21,10 @@ _scheduler: AsyncIOScheduler | None = None
 async def check_stale_tickets(db: TrackerDB) -> list[dict]:
     stale = await db.get_stale_incidents(hours_threshold=STALE_HOURS_THRESHOLD)
     for incident in stale:
-        await notify_all(
-            f"Reminder: ticket #{incident['id']} ({incident['alert_type']}: {incident['title']}) "
-            f"is still {incident['status']} with no update in over {STALE_HOURS_THRESHOLD}h."
+        await notify(
+            f"SOC Tracker: ticket #{incident['id']} is stale",
+            f"Ticket #{incident['id']} ({incident['alert_type']}: {incident['title']}) "
+            f"is still {incident['status']} with no update in over {STALE_HOURS_THRESHOLD}h.",
         )
     return stale
 

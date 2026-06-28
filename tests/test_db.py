@@ -57,6 +57,50 @@ async def test_invalid_status_rejected(db):
         await db.update_status(incident["id"], "not_a_real_status")
 
 
+async def test_closing_without_reason_rejected(db):
+    incident = await db.create_incident("Phishing", "test")
+    with pytest.raises(ValueError, match="disposition reason"):
+        await db.update_status(incident["id"], "resolved")
+
+
+async def test_false_positive_without_reason_rejected(db):
+    incident = await db.create_incident("Phishing", "test")
+    with pytest.raises(ValueError, match="disposition reason"):
+        await db.update_status(incident["id"], "false_positive")
+
+
+async def test_closing_while_awaiting_stakeholder_rejected(db):
+    incident = await db.create_incident("Phishing", "test")
+    await db.set_awaiting_stakeholder(incident["id"], True)
+    with pytest.raises(ValueError, match="stakeholder"):
+        await db.update_status(incident["id"], "resolved", "Confirmed benign")
+
+
+async def test_closing_after_stakeholder_replied_succeeds(db):
+    incident = await db.create_incident("Phishing", "test")
+    await db.set_awaiting_stakeholder(incident["id"], True)
+    await db.set_awaiting_stakeholder(incident["id"], False)
+    await db.update_status(incident["id"], "resolved", "Confirmed benign")
+    fetched = await db.get_incident(incident["id"])
+    assert fetched["status"] == "resolved"
+
+
+async def test_closing_with_existing_disposition_reason_does_not_require_new_one(db):
+    incident = await db.create_incident("Phishing", "test")
+    await db.update_status(incident["id"], "escalated", "Needs IR review")
+    await db.update_status(incident["id"], "resolved")
+    fetched = await db.get_incident(incident["id"])
+    assert fetched["status"] == "resolved"
+    assert fetched["disposition_reason"] == "Needs IR review"
+
+
+async def test_escalating_without_reason_does_not_require_closure_checks(db):
+    incident = await db.create_incident("Phishing", "test")
+    await db.update_status(incident["id"], "escalated")
+    fetched = await db.get_incident(incident["id"])
+    assert fetched["status"] == "escalated"
+
+
 async def test_update_status_on_missing_incident_returns_false(db):
     result = await db.update_status(99999, "resolved")
     assert result is False
@@ -105,7 +149,7 @@ async def test_recently_updated_incident_not_stale(db):
 
 async def test_resolved_incident_never_counted_as_stale(db):
     incident = await db.create_incident("Phishing", "test")
-    await db.update_status(incident["id"], "resolved")
+    await db.update_status(incident["id"], "resolved", "Confirmed benign")
     stale = await db.get_stale_incidents(hours_threshold=0)
     assert stale == []
 
@@ -132,6 +176,46 @@ async def test_list_sops(db):
     await db.upsert_sop("System Compromise", "steps b")
     sops = await db.list_sops()
     assert len(sops) == 2
+
+
+async def test_sop_with_structured_rule_book_fields(db):
+    structured = {
+        "investigation_steps": ["Check source IP", "Review auth logs"],
+        "required_fields": ["Source IP", "Username"],
+        "escalation_criteria": "More than 50 attempts in 10 minutes",
+        "splunk_query_hint": "index=vpn action=failure",
+        "containment_actions": ["Block source IP at firewall"],
+        "closure_checklist": ["Evidence attached", "Stakeholder notified"],
+        "false_positive_indicators": ["Known scheduled job IP"],
+    }
+    await db.upsert_sop("GP-VPN Brute Force Attempts", "1. Check source\n2. Block if malicious",
+                         category="SOP-01: VPN / Authentication / Password Spraying", structured=structured)
+    sop = await db.get_sop("GP-VPN Brute Force Attempts")
+    assert sop["category"] == "SOP-01: VPN / Authentication / Password Spraying"
+    assert sop["structured"]["escalation_criteria"] == "More than 50 attempts in 10 minutes"
+    assert "Check source IP" in sop["structured"]["investigation_steps"]
+
+
+async def test_sop_without_structured_fields_has_none(db):
+    await db.upsert_sop("Phishing", "basic steps")
+    sop = await db.get_sop("Phishing")
+    assert sop["structured"] is None
+    assert sop["category"] is None
+
+
+async def test_get_setting_missing_returns_none(db):
+    assert await db.get_setting("nonexistent_key") is None
+
+
+async def test_set_and_get_setting(db):
+    await db.set_setting("admin_password_hash", "some-hash-value")
+    assert await db.get_setting("admin_password_hash") == "some-hash-value"
+
+
+async def test_set_setting_overwrites_existing(db):
+    await db.set_setting("admin_password_hash", "old-hash")
+    await db.set_setting("admin_password_hash", "new-hash")
+    assert await db.get_setting("admin_password_hash") == "new-hash"
 
 
 async def test_create_incident_with_external_ticket_ref(db):

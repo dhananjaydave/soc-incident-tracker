@@ -12,20 +12,27 @@ import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import Cookie, Depends, FastAPI, HTTPException, Request, Response
+from fastapi import Cookie, Depends, FastAPI, File, Form, HTTPException, Request, Response, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel, Field
 
-from . import auth, telegram_bot
+from . import auth, integrations, telegram_bot
 from .db import TrackerDB
 from .mitre_knowledge import get_technique, list_techniques
+from .notifications import notify
+from .pdf_export import build_incidents_pdf
+from .rule_book import SOP_CATEGORIES, seed_rule_book
 from .scheduler import start_scheduler, stop_scheduler
 from .security_feed import fetch_all_feeds
 from .seed_sops import seed_default_sops
 
 db = TrackerDB()
 
+# Most JSON API routes are tiny - this stays small. File-upload routes
+# (phishing .eml / file analysis) have their own separate, larger cap
+# below since they pass raw file bytes through to the other internal tools.
 MAX_BODY_BYTES = 200 * 1024
+MAX_UPLOAD_BYTES = 12 * 1024 * 1024
 MAX_TEXT_LENGTH = 4096
 
 # Notify at most once per rate-limit window per IP, not once per blocked
@@ -37,6 +44,7 @@ _rate_limit_notified_at: dict[str, float] = {}
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await seed_default_sops(db)
+    await seed_rule_book(db)
     start_scheduler(db)
     yield
     stop_scheduler()
@@ -50,10 +58,14 @@ ADMIN_USERNAME = os.environ.get("TRACKER_ADMIN_USERNAME", "admin")
 ADMIN_PASSWORD_HASH = os.environ.get("TRACKER_ADMIN_PASSWORD_HASH")
 
 
+_UPLOAD_PATHS = {"/api/investigate/phishing", "/api/investigate/file"}
+
+
 @app.middleware("http")
 async def reject_oversized_bodies(request: Request, call_next):
+    limit = MAX_UPLOAD_BYTES if request.url.path in _UPLOAD_PATHS else MAX_BODY_BYTES
     content_length = request.headers.get("content-length")
-    if content_length and content_length.isdigit() and int(content_length) > MAX_BODY_BYTES:
+    if content_length and content_length.isdigit() and int(content_length) > limit:
         return JSONResponse(status_code=413, content={"detail": "Request body too large."})
     return await call_next(request)
 
@@ -72,6 +84,14 @@ def _client_ip(request: Request) -> str:
     if cf_ip:
         return cf_ip.strip()
     return request.client.host if request.client else "unknown"
+
+
+async def _current_password_hash() -> str | None:
+    # A changed password is stored in the database (so it persists and is
+    # actually changeable at runtime) and takes priority over the env var,
+    # which only serves as the initial bootstrap value before any change.
+    db_hash = await db.get_setting("admin_password_hash")
+    return db_hash or ADMIN_PASSWORD_HASH
 
 
 def require_auth(tracker_session: str | None = Cookie(default=None)) -> str:
@@ -107,9 +127,15 @@ class AwaitingStakeholderRequest(BaseModel):
     awaiting: bool
 
 
+class ChangePasswordRequest(BaseModel):
+    current_password: str = Field(max_length=256)
+    new_password: str = Field(min_length=12, max_length=256)
+
+
 class SopRequest(BaseModel):
     alert_type: str = Field(max_length=256)
     steps: str = Field(max_length=MAX_TEXT_LENGTH)
+    category: str | None = Field(default=None, max_length=256)
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -133,13 +159,14 @@ async def login(body: LoginRequest, request: Request, response: Response):
         last_notified = _rate_limit_notified_at.get(ip, 0)
         if time.time() - last_notified > auth.LOGIN_RATE_LIMIT_WINDOW_SECONDS:
             _rate_limit_notified_at[ip] = time.time()
-            await telegram_bot.notify_all(f"Tracker login rate limit hit from {ip} - possible brute-force attempt.")
+            await notify("SOC Tracker: possible brute-force login attempt", f"Login rate limit hit from {ip}.")
         raise HTTPException(status_code=429, detail="Too many login attempts - try again later.")
 
-    if not ADMIN_PASSWORD_HASH:
+    current_hash = await _current_password_hash()
+    if not current_hash:
         raise HTTPException(status_code=500, detail="Server not configured - no admin password set.")
 
-    if body.username != ADMIN_USERNAME or not auth.verify_password(body.password, ADMIN_PASSWORD_HASH):
+    if body.username != ADMIN_USERNAME or not auth.verify_password(body.password, current_hash):
         raise HTTPException(status_code=401, detail="Invalid username or password.")
 
     auth.reset_rate_limit(ip)
@@ -148,13 +175,25 @@ async def login(body: LoginRequest, request: Request, response: Response):
         auth.SESSION_COOKIE_NAME, token, max_age=auth.SESSION_MAX_AGE_SECONDS,
         httponly=True, secure=True, samesite="strict",
     )
-    await telegram_bot.notify_all(f"Tracker login successful from {ip}.")
+    await notify("SOC Tracker: login", f"Login successful from {ip}.")
     return {"status": "ok"}
 
 
 @app.post("/logout")
 async def logout(response: Response, _user: str = Depends(require_auth)):
     response.delete_cookie(auth.SESSION_COOKIE_NAME)
+    return {"status": "ok"}
+
+
+@app.post("/api/change-password")
+async def change_password(body: ChangePasswordRequest, request: Request, _user: str = Depends(require_auth)):
+    current_hash = await _current_password_hash()
+    if not current_hash or not auth.verify_password(body.current_password, current_hash):
+        raise HTTPException(status_code=401, detail="Current password is incorrect.")
+
+    new_hash = auth.hash_password(body.new_password)
+    await db.set_setting("admin_password_hash", new_hash)
+    await notify("SOC Tracker: password changed", f"Dashboard password was changed from {_client_ip(request)}.")
     return {"status": "ok"}
 
 
@@ -174,7 +213,7 @@ async def create_incident(body: CreateIncidentRequest, _user: str = Depends(requ
         body.alert_type, body.title, body.description, body.external_ticket_ref, body.affected_user
     )
     sop = await db.get_sop(body.alert_type)
-    await telegram_bot.notify_all(f"New ticket #{incident['id']}: [{body.alert_type}] {body.title}")
+    await notify(f"SOC Tracker: new ticket #{incident['id']}", f"[{body.alert_type}] {body.title}")
     return {"incident": incident, "sop": sop}
 
 
@@ -197,6 +236,16 @@ async def export_incidents(_user: str = Depends(require_auth)):
     )
 
 
+@app.get("/api/incidents/export/pdf")
+async def export_incidents_pdf(_user: str = Depends(require_auth)):
+    incidents = await db.list_incidents()
+    pdf_bytes = build_incidents_pdf(incidents)
+    return Response(
+        content=pdf_bytes, media_type="application/pdf",
+        headers={"Content-Disposition": "attachment; filename=incidents.pdf"},
+    )
+
+
 @app.get("/api/incidents/{incident_id}")
 async def get_incident(incident_id: int, _user: str = Depends(require_auth)):
     incident = await db.get_incident(incident_id)
@@ -215,7 +264,7 @@ async def update_status(incident_id: int, body: StatusUpdateRequest, _user: str 
         raise HTTPException(status_code=400, detail=str(exc))
     if not updated:
         raise HTTPException(status_code=404, detail="Incident not found.")
-    await telegram_bot.notify_all(f"Ticket #{incident_id} marked {body.status}.")
+    await notify(f"SOC Tracker: ticket #{incident_id} {body.status}", f"Ticket #{incident_id} marked {body.status}.")
     return {"status": "ok"}
 
 
@@ -235,6 +284,11 @@ async def set_awaiting_stakeholder(incident_id: int, body: AwaitingStakeholderRe
     return {"status": "ok"}
 
 
+@app.get("/api/rule-book/categories")
+async def rule_book_categories(_user: str = Depends(require_auth)):
+    return SOP_CATEGORIES
+
+
 @app.get("/api/sops")
 async def list_sops(_user: str = Depends(require_auth)):
     return await db.list_sops()
@@ -242,7 +296,7 @@ async def list_sops(_user: str = Depends(require_auth)):
 
 @app.post("/api/sops")
 async def upsert_sop(body: SopRequest, _user: str = Depends(require_auth)):
-    await db.upsert_sop(body.alert_type, body.steps)
+    await db.upsert_sop(body.alert_type, body.steps, category=body.category)
     return {"status": "ok"}
 
 
@@ -270,6 +324,39 @@ async def mitre_detail(technique_id: str, _user: str = Depends(require_auth)):
 @app.get("/api/feed")
 async def security_feed(_user: str = Depends(require_auth)):
     return await fetch_all_feeds()
+
+
+@app.get("/api/investigate/ioc")
+async def investigate_ioc(indicator: str, checks: str = "all", _user: str = Depends(require_auth)):
+    try:
+        return await integrations.lookup_ioc(indicator, checks)
+    except Exception:
+        raise HTTPException(status_code=502, detail="IOC enrichment service unavailable.")
+
+
+@app.post("/api/investigate/phishing")
+async def investigate_phishing(raw_text: str | None = Form(default=None),
+                                file: UploadFile | None = File(default=None),
+                                _user: str = Depends(require_auth)):
+    if not raw_text and not file:
+        raise HTTPException(status_code=400, detail="Provide raw_text or an .eml file.")
+    file_bytes = await file.read() if file else None
+    try:
+        return await integrations.analyze_phishing(raw_text=raw_text, file_bytes=file_bytes,
+                                                     filename=file.filename if file else None)
+    except Exception:
+        raise HTTPException(status_code=502, detail="Phishing triage service unavailable.")
+
+
+@app.post("/api/investigate/file")
+async def investigate_file(file: UploadFile = File(...), _user: str = Depends(require_auth)):
+    file_bytes = await file.read()
+    if not file_bytes:
+        raise HTTPException(status_code=400, detail="Empty file.")
+    try:
+        return await integrations.analyze_file(file_bytes, file.filename or "upload")
+    except Exception:
+        raise HTTPException(status_code=502, detail="File analyser service unavailable.")
 
 
 @app.post("/telegram/webhook")

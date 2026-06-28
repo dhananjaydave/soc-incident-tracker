@@ -106,6 +106,55 @@ def test_logout_clears_session(client):
     assert resp.status_code == 401
 
 
+def test_change_password_success(client):
+    _login(client)
+    resp = client.post("/api/change-password", json={
+        "current_password": TEST_PASSWORD, "new_password": "a-brand-new-strong-password",
+    })
+    assert resp.status_code == 200
+
+
+def test_change_password_then_login_with_new_password(client):
+    _login(client)
+    client.post("/api/change-password", json={
+        "current_password": TEST_PASSWORD, "new_password": "a-brand-new-strong-password",
+    })
+    client.post("/logout")
+    resp = client.post("/login", json={"username": "admin", "password": "a-brand-new-strong-password"})
+    assert resp.status_code == 200
+
+
+def test_change_password_old_password_no_longer_works(client):
+    _login(client)
+    client.post("/api/change-password", json={
+        "current_password": TEST_PASSWORD, "new_password": "a-brand-new-strong-password",
+    })
+    client.post("/logout")
+    resp = client.post("/login", json={"username": "admin", "password": TEST_PASSWORD})
+    assert resp.status_code == 401
+
+
+def test_change_password_wrong_current_password_rejected(client):
+    _login(client)
+    resp = client.post("/api/change-password", json={
+        "current_password": "totally-wrong", "new_password": "a-brand-new-strong-password",
+    })
+    assert resp.status_code == 401
+
+
+def test_change_password_requires_auth(client):
+    resp = client.post("/api/change-password", json={
+        "current_password": TEST_PASSWORD, "new_password": "a-brand-new-strong-password",
+    })
+    assert resp.status_code == 401
+
+
+def test_change_password_rejects_too_short_new_password(client):
+    _login(client)
+    resp = client.post("/api/change-password", json={"current_password": TEST_PASSWORD, "new_password": "short"})
+    assert resp.status_code == 422
+
+
 def test_me_endpoint(client):
     _login(client)
     resp = client.get("/api/me")
@@ -200,6 +249,20 @@ def test_export_csv_requires_auth(client):
     assert resp.status_code == 401
 
 
+def test_export_pdf_requires_auth(client):
+    resp = client.get("/api/incidents/export/pdf")
+    assert resp.status_code == 401
+
+
+def test_export_pdf_returns_valid_pdf(client):
+    _login(client)
+    client.post("/api/incidents", json={"alert_type": "Phishing", "title": "Exported ticket"})
+    resp = client.get("/api/incidents/export/pdf")
+    assert resp.status_code == 200
+    assert resp.headers["content-type"] == "application/pdf"
+    assert resp.content.startswith(b"%PDF")
+
+
 def test_summary_endpoint(client):
     _login(client)
     client.post("/api/incidents", json={"alert_type": "Phishing", "title": "test"})
@@ -250,6 +313,21 @@ def test_update_status_nonexistent_incident(client):
     assert resp.status_code == 404
 
 
+def test_update_status_resolve_without_reason_rejected(client):
+    _login(client)
+    created = client.post("/api/incidents", json={"alert_type": "Brute Force", "title": "test"}).json()["incident"]
+    resp = client.post(f"/api/incidents/{created['id']}/status", json={"status": "resolved"})
+    assert resp.status_code == 400
+
+
+def test_update_status_resolve_while_awaiting_stakeholder_rejected(client):
+    _login(client)
+    created = client.post("/api/incidents", json={"alert_type": "Brute Force", "title": "test"}).json()["incident"]
+    client.post(f"/api/incidents/{created['id']}/awaiting-stakeholder", json={"awaiting": True})
+    resp = client.post(f"/api/incidents/{created['id']}/status", json={"status": "resolved", "reason": "benign"})
+    assert resp.status_code == 400
+
+
 def test_list_incidents_filtered_by_status(client):
     _login(client)
     client.post("/api/incidents", json={"alert_type": "Phishing", "title": "a"})
@@ -278,6 +356,35 @@ def test_get_sop_for_unregistered_type_404(client):
     _login(client)
     resp = client.get("/api/sops/Nonexistent")
     assert resp.status_code == 404
+
+
+def test_upsert_sop_with_category(client):
+    _login(client)
+    client.post("/api/sops", json={
+        "alert_type": "My Custom Rule", "steps": "1. Do the thing", "category": "SOP-01: Custom",
+    })
+    resp = client.get("/api/sops/My Custom Rule")
+    assert resp.json()["category"] == "SOP-01: Custom"
+
+
+def test_rule_book_categories_requires_auth(client):
+    resp = client.get("/api/rule-book/categories")
+    assert resp.status_code == 401
+
+
+def test_rule_book_categories_returns_six(client):
+    _login(client)
+    resp = client.get("/api/rule-book/categories")
+    assert resp.status_code == 200
+    assert len(resp.json()) == 6
+
+
+def test_real_rule_book_entries_present_in_sops_list(client):
+    _login(client)
+    resp = client.get("/api/sops")
+    alert_types = {sop["alert_type"] for sop in resp.json()}
+    assert "Azure Risky Sign-in" in alert_types
+    assert "O365 Phishing Alert" in alert_types
 
 
 def test_mitre_list(client):
@@ -316,6 +423,68 @@ def test_feed_returns_results(client):
         resp = client.get("/api/feed")
     assert resp.status_code == 200
     assert resp.json() == fake_result
+
+
+def test_investigate_ioc_requires_auth(client):
+    resp = client.get("/api/investigate/ioc", params={"indicator": "1.2.3.4"})
+    assert resp.status_code == 401
+
+
+def test_investigate_ioc_returns_enrichment_result(client):
+    _login(client)
+    fake_result = {"indicator": "1.2.3.4", "type": "ip", "verdict": "malicious"}
+    with patch("tracker.integrations.lookup_ioc", new_callable=AsyncMock, return_value=fake_result) as mock_lookup:
+        resp = client.get("/api/investigate/ioc", params={"indicator": "1.2.3.4"})
+    assert resp.status_code == 200
+    assert resp.json() == fake_result
+    mock_lookup.assert_called_once_with("1.2.3.4", "all")
+
+
+def test_investigate_ioc_service_unavailable_returns_502(client):
+    _login(client)
+    with patch("tracker.integrations.lookup_ioc", new_callable=AsyncMock, side_effect=ConnectionError("down")):
+        resp = client.get("/api/investigate/ioc", params={"indicator": "1.2.3.4"})
+    assert resp.status_code == 502
+
+
+def test_investigate_phishing_requires_auth(client):
+    resp = client.post("/api/investigate/phishing", data={"raw_text": "test"})
+    assert resp.status_code == 401
+
+
+def test_investigate_phishing_with_raw_text(client):
+    _login(client)
+    fake_result = {"verdict": "phishing", "subject": "Urgent"}
+    with patch("tracker.integrations.analyze_phishing", new_callable=AsyncMock, return_value=fake_result):
+        resp = client.post("/api/investigate/phishing", data={"raw_text": "click here now"})
+    assert resp.status_code == 200
+    assert resp.json() == fake_result
+
+
+def test_investigate_phishing_requires_input(client):
+    _login(client)
+    resp = client.post("/api/investigate/phishing", data={})
+    assert resp.status_code == 400
+
+
+def test_investigate_file_requires_auth(client):
+    resp = client.post("/api/investigate/file", files={"file": ("test.exe", b"fake bytes")})
+    assert resp.status_code == 401
+
+
+def test_investigate_file_returns_analysis(client):
+    _login(client)
+    fake_result = {"verdict": "clean", "filename": "test.txt", "hashes": {"sha256": "abc"}}
+    with patch("tracker.integrations.analyze_file", new_callable=AsyncMock, return_value=fake_result):
+        resp = client.post("/api/investigate/file", files={"file": ("test.txt", b"hello world")})
+    assert resp.status_code == 200
+    assert resp.json() == fake_result
+
+
+def test_investigate_file_empty_file_rejected(client):
+    _login(client)
+    resp = client.post("/api/investigate/file", files={"file": ("empty.txt", b"")})
+    assert resp.status_code == 400
 
 
 def test_telegram_webhook_wrong_secret_rejected(client, monkeypatch):

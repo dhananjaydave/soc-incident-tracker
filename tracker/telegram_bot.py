@@ -77,7 +77,10 @@ async def _handle_status_change(db: TrackerDB, args: str, status: str) -> str:
     incident = await db.get_incident(incident_id)
     if not incident:
         return f"No ticket #{incident_id} found."
-    await db.update_status(incident_id, status, reason)
+    try:
+        await db.update_status(incident_id, status, reason)
+    except ValueError as exc:
+        return str(exc)
     return f"Ticket #{incident_id} marked {status}."
 
 

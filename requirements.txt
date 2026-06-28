@@ -7,3 +7,4 @@ bcrypt>=4.1
 itsdangerous>=2.2
 APScheduler>=3.10
 feedparser>=6.0
+fpdf2>=2.7

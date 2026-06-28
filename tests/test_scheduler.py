@@ -24,7 +24,7 @@ async def test_check_stale_tickets_notifies_for_each_stale_ticket(db):
     conn.commit()
     conn.close()
 
-    with patch("tracker.scheduler.notify_all", new_callable=AsyncMock) as mock_notify:
+    with patch("tracker.scheduler.notify", new_callable=AsyncMock) as mock_notify:
         stale = await scheduler.check_stale_tickets(db)
         assert len(stale) == 1
         mock_notify.assert_called_once()
@@ -33,7 +33,7 @@ async def test_check_stale_tickets_notifies_for_each_stale_ticket(db):
 
 async def test_check_stale_tickets_no_notification_when_nothing_stale(db):
     await db.create_incident("Phishing", "Fresh ticket")
-    with patch("tracker.scheduler.notify_all", new_callable=AsyncMock) as mock_notify:
+    with patch("tracker.scheduler.notify", new_callable=AsyncMock) as mock_notify:
         stale = await scheduler.check_stale_tickets(db)
         assert stale == []
         mock_notify.assert_not_called()

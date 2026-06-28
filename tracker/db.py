@@ -63,7 +63,20 @@ def _connect(db_path: str) -> sqlite3.Connection:
         )
         """
     )
+    existing_sop_columns = {row[1] for row in conn.execute("PRAGMA table_info(sops)").fetchall()}
+    if "category" not in existing_sop_columns:
+        conn.execute("ALTER TABLE sops ADD COLUMN category TEXT")
+    if "structured_json" not in existing_sop_columns:
+        conn.execute("ALTER TABLE sops ADD COLUMN structured_json TEXT")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_incidents_status ON incidents(status)")
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS settings (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        )
+        """
+    )
     conn.row_factory = sqlite3.Row
     return conn
 
@@ -240,14 +253,48 @@ def _export_incidents_csv_sync(db_path: str) -> str:
         conn.close()
 
 
-def _upsert_sop_sync(db_path: str, alert_type: str, steps: str) -> None:
+def _get_setting_sync(db_path: str, key: str) -> str | None:
+    conn = _connect(db_path)
+    try:
+        row = conn.execute("SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
+        return row["value"] if row else None
+    finally:
+        conn.close()
+
+
+def _set_setting_sync(db_path: str, key: str, value: str) -> None:
+    conn = _connect(db_path)
+    try:
+        conn.execute(
+            "INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            (key, value),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _row_to_sop(row: sqlite3.Row) -> dict:
+    import json
+    sop = dict(row)
+    raw = sop.pop("structured_json", None)
+    sop["structured"] = json.loads(raw) if raw else None
+    return sop
+
+
+def _upsert_sop_sync(db_path: str, alert_type: str, steps: str, category: str | None = None,
+                      structured: dict | None = None) -> None:
+    import json
     conn = _connect(db_path)
     try:
         now = datetime.now(timezone.utc).isoformat()
+        structured_json = json.dumps(structured) if structured else None
         conn.execute(
-            "INSERT INTO sops (alert_type, steps, created_at, updated_at) VALUES (?, ?, ?, ?) "
-            "ON CONFLICT(alert_type) DO UPDATE SET steps = excluded.steps, updated_at = excluded.updated_at",
-            (alert_type, steps, now, now),
+            "INSERT INTO sops (alert_type, steps, category, structured_json, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(alert_type) DO UPDATE SET steps = excluded.steps, category = excluded.category, "
+            "structured_json = excluded.structured_json, updated_at = excluded.updated_at",
+            (alert_type, steps, category, structured_json, now, now),
         )
         conn.commit()
     finally:
@@ -258,7 +305,7 @@ def _get_sop_sync(db_path: str, alert_type: str) -> dict | None:
     conn = _connect(db_path)
     try:
         row = conn.execute("SELECT * FROM sops WHERE alert_type = ?", (alert_type,)).fetchone()
-        return dict(row) if row else None
+        return _row_to_sop(row) if row else None
     finally:
         conn.close()
 
@@ -267,7 +314,7 @@ def _list_sops_sync(db_path: str) -> list[dict]:
     conn = _connect(db_path)
     try:
         rows = conn.execute("SELECT * FROM sops ORDER BY alert_type ASC").fetchall()
-        return [dict(r) for r in rows]
+        return [_row_to_sop(r) for r in rows]
     finally:
         conn.close()
 
@@ -294,6 +341,12 @@ class TrackerDB:
     async def export_incidents_csv(self) -> str:
         return await asyncio.to_thread(_export_incidents_csv_sync, self.db_path)
 
+    async def get_setting(self, key: str) -> str | None:
+        return await asyncio.to_thread(_get_setting_sync, self.db_path, key)
+
+    async def set_setting(self, key: str, value: str) -> None:
+        await asyncio.to_thread(_set_setting_sync, self.db_path, key, value)
+
     async def get_incident(self, incident_id: int) -> dict | None:
         return await asyncio.to_thread(_get_incident_sync, self.db_path, incident_id)
 
@@ -303,6 +356,13 @@ class TrackerDB:
     async def update_status(self, incident_id: int, status: str, disposition_reason: str | None = None) -> bool:
         if status not in VALID_STATUSES:
             raise ValueError(f"Invalid status {status!r} - must be one of {VALID_STATUSES}")
+        if status in ("resolved", "false_positive"):
+            incident = await self.get_incident(incident_id)
+            if incident:
+                if incident["awaiting_stakeholder_reply"]:
+                    raise ValueError("Cannot close while still awaiting a stakeholder reply.")
+                if not disposition_reason and not incident["disposition_reason"]:
+                    raise ValueError("Closure requires a disposition reason explaining the resolution.")
         return await asyncio.to_thread(_update_status_sync, self.db_path, incident_id, status, disposition_reason)
 
     async def add_update_note(self, incident_id: int, note: str) -> bool:
@@ -314,8 +374,9 @@ class TrackerDB:
     async def get_stale_incidents(self, hours_threshold: int = 24) -> list[dict]:
         return await asyncio.to_thread(_get_stale_incidents_sync, self.db_path, hours_threshold)
 
-    async def upsert_sop(self, alert_type: str, steps: str) -> None:
-        await asyncio.to_thread(_upsert_sop_sync, self.db_path, alert_type, steps)
+    async def upsert_sop(self, alert_type: str, steps: str, category: str | None = None,
+                          structured: dict | None = None) -> None:
+        await asyncio.to_thread(_upsert_sop_sync, self.db_path, alert_type, steps, category, structured)
 
     async def get_sop(self, alert_type: str) -> dict | None:
         return await asyncio.to_thread(_get_sop_sync, self.db_path, alert_type)
