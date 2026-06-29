@@ -207,6 +207,36 @@ def test_create_incident_rejects_non_json_body(client):
     assert resp.status_code == 422
 
 
+def test_emergency_incident_requires_auth(client):
+    resp = client.post("/api/incidents/emergency", json={"title": "Active ransomware spreading"})
+    assert resp.status_code == 401
+
+
+def test_emergency_incident_created_already_escalated(client):
+    _login(client)
+    resp = client.post("/api/incidents/emergency", json={"title": "Active ransomware spreading"})
+    assert resp.status_code == 200
+    incident = resp.json()["incident"]
+    assert incident["status"] == "escalated"
+    assert incident["alert_type"] == "Major Incident"
+    assert incident["disposition_reason"]
+
+
+def test_emergency_incident_sends_notification(client):
+    _login(client)
+    with patch("tracker.api.notify", new_callable=AsyncMock) as mock_notify:
+        client.post("/api/incidents/emergency", json={"title": "Active ransomware spreading"})
+    mock_notify.assert_called_once()
+    assert "MAJOR INCIDENT" in mock_notify.call_args[0][0]
+
+
+def test_emergency_incident_appears_in_ticket_list(client):
+    _login(client)
+    client.post("/api/incidents/emergency", json={"title": "Active ransomware spreading"})
+    resp = client.get("/api/incidents")
+    assert any(t["alert_type"] == "Major Incident" for t in resp.json())
+
+
 def test_get_incident_with_updates_and_sop(client):
     _login(client)
     created = client.post("/api/incidents", json={"alert_type": "Phishing", "title": "test"}).json()["incident"]
@@ -215,6 +245,25 @@ def test_get_incident_with_updates_and_sop(client):
     body = resp.json()
     assert len(body["updates"]) == 1
     assert body["sop"] is not None
+
+
+def test_get_incident_includes_investigation_score(client):
+    _login(client)
+    created = client.post("/api/incidents", json={"alert_type": "Azure Risky Sign-in", "title": "test"}).json()["incident"]
+    resp = client.get(f"/api/incidents/{created['id']}")
+    score = resp.json()["investigation_score"]
+    assert "percent_done" in score
+    assert "items" in score
+
+
+def test_get_incident_includes_disposition_history(client):
+    _login(client)
+    created = client.post("/api/incidents", json={"alert_type": "Phishing", "title": "test"}).json()["incident"]
+    client.post(f"/api/incidents/{created['id']}/status", json={"status": "false_positive", "reason": "benign"})
+    resp = client.get(f"/api/incidents/{created['id']}")
+    history = resp.json()["disposition_history"]
+    assert history["by_status"]["false_positive"] == 1
+    assert history["total"] == 1
 
 
 def test_get_nonexistent_incident_404(client):
@@ -394,6 +443,21 @@ def test_rule_book_categories_returns_six(client):
     resp = client.get("/api/rule-book/categories")
     assert resp.status_code == 200
     assert len(resp.json()) == 6
+
+
+def test_disposition_history_route_requires_auth(client):
+    resp = client.get("/api/disposition-history", params={"alert_type": "Phishing"})
+    assert resp.status_code == 401
+
+
+def test_disposition_history_route_returns_counts(client):
+    _login(client)
+    created = client.post("/api/incidents", json={"alert_type": "Phishing", "title": "test"}).json()["incident"]
+    client.post(f"/api/incidents/{created['id']}/status", json={"status": "false_positive", "reason": "benign"})
+    resp = client.get("/api/disposition-history", params={"alert_type": "Phishing"})
+    body = resp.json()
+    assert body["total"] == 1
+    assert body["by_status"]["false_positive"] == 1
 
 
 def test_real_rule_book_entries_present_in_sops_list(client):

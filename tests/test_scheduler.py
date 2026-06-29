@@ -90,6 +90,14 @@ async def test_check_internal_tools_notifies_on_recovery(monkeypatch):
     assert scheduler._previously_down == set()
 
 
+async def test_send_daily_digest_calls_notify(db):
+    with patch("tracker.scheduler.build_daily_digest", new_callable=AsyncMock, return_value="digest text"), \
+         patch("tracker.scheduler.notify", new_callable=AsyncMock) as mock_notify:
+        await scheduler.send_daily_digest(db)
+
+    mock_notify.assert_called_once_with("SOC Tracker: daily digest", "digest text")
+
+
 async def test_start_scheduler_is_idempotent(db):
     scheduler.start_scheduler(db)
     try:

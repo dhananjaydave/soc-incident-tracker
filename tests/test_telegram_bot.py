@@ -1,5 +1,6 @@
 import tempfile
 from pathlib import Path
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -138,6 +139,13 @@ async def test_summary_custom_window(db):
 async def test_summary_invalid_window(db):
     reply = await telegram_bot.handle_command(db, "/summary notanumber")
     assert "Usage" in reply
+
+
+async def test_digest_command(db):
+    await db.create_incident("Phishing", "test")
+    with patch("tracker.telegram_bot.build_daily_digest", new_callable=AsyncMock, return_value="digest content"):
+        reply = await telegram_bot.handle_command(db, "/digest")
+    assert reply == "digest content"
 
 
 def test_is_authorized(monkeypatch):

@@ -342,6 +342,31 @@ async def test_get_user_history_empty_for_unknown_user(db):
     assert history == []
 
 
+async def test_disposition_history_counts_by_status(db):
+    a = await db.create_incident("Phishing", "a")
+    b = await db.create_incident("Phishing", "b")
+    c = await db.create_incident("Phishing", "c")
+    await db.update_status(a["id"], "false_positive", "benign")
+    await db.update_status(b["id"], "false_positive", "benign")
+    await db.update_status(c["id"], "resolved", "confirmed")
+
+    history = await db.get_disposition_history("Phishing")
+    assert history["total"] == 3
+    assert history["by_status"]["false_positive"] == 2
+    assert history["by_status"]["resolved"] == 1
+
+
+async def test_disposition_history_empty_for_unknown_alert_type(db):
+    history = await db.get_disposition_history("Nonexistent Alert Type")
+    assert history == {"by_status": {}, "total": 0}
+
+
+async def test_disposition_history_case_insensitive(db):
+    await db.create_incident("phishing", "a")
+    history = await db.get_disposition_history("Phishing")
+    assert history["total"] == 1
+
+
 async def test_export_csv_empty_db_has_header_only(db):
     csv_text = await db.export_incidents_csv()
     lines = csv_text.strip().splitlines()

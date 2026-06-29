@@ -3,6 +3,7 @@
 - stale ticket reminders (open/escalated, no update in N hours)
 - new high-severity CVE / CISA KEV checks
 - internal-tool (IOC/Phishing/File-Analyser) reachability checks
+- a daily shift-handoff digest at a fixed hour
 
 All push a Telegram (+ email, if configured) notification via
 .notifications.notify so a forgotten ticket, a newly exploited CVE, or a
@@ -17,6 +18,7 @@ import os
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 from . import cve_monitor, health_check
+from .daily_digest import build_daily_digest
 from .db import TrackerDB
 from .notifications import notify
 
@@ -24,6 +26,9 @@ STALE_HOURS_THRESHOLD = int(os.environ.get("TRACKER_STALE_HOURS", "24"))
 CHECK_INTERVAL_MINUTES = int(os.environ.get("TRACKER_CHECK_INTERVAL_MINUTES", "60"))
 CVE_CHECK_INTERVAL_MINUTES = int(os.environ.get("TRACKER_CVE_CHECK_INTERVAL_MINUTES", "240"))
 HEALTH_CHECK_INTERVAL_MINUTES = int(os.environ.get("TRACKER_HEALTH_CHECK_INTERVAL_MINUTES", "15"))
+# UTC hour - default 02:00 UTC = 07:30 IST, a reasonable "before a typical
+# morning shift" time. Adjust to your own timezone/shift start.
+DAILY_DIGEST_HOUR_UTC = int(os.environ.get("TRACKER_DAILY_DIGEST_HOUR_UTC", "2"))
 
 _scheduler: AsyncIOScheduler | None = None
 
@@ -80,6 +85,11 @@ async def check_internal_tools() -> None:
     _previously_down = currently_down
 
 
+async def send_daily_digest(db: TrackerDB) -> None:
+    digest = await build_daily_digest(db)
+    await notify("SOC Tracker: daily digest", digest)
+
+
 def start_scheduler(db: TrackerDB) -> None:
     """Idempotent - calling this more than once (e.g. from a duplicate
     module import path) must not register the jobs twice.
@@ -96,6 +106,7 @@ def start_scheduler(db: TrackerDB) -> None:
     _scheduler.add_job(check_stale_tickets, "interval", minutes=CHECK_INTERVAL_MINUTES, args=[db])
     _scheduler.add_job(check_cve_and_kev, "interval", minutes=CVE_CHECK_INTERVAL_MINUTES, args=[db])
     _scheduler.add_job(check_internal_tools, "interval", minutes=HEALTH_CHECK_INTERVAL_MINUTES)
+    _scheduler.add_job(send_daily_digest, "cron", hour=DAILY_DIGEST_HOUR_UTC, minute=0, args=[db])
     _scheduler.start()
 
 

@@ -19,6 +19,7 @@ from pydantic import BaseModel, Field
 
 from . import auth, integrations, telegram_bot
 from .db import TrackerDB
+from .investigation_score import compute_investigation_score
 from .mitre_knowledge import get_technique, list_techniques, search_techniques
 from .notifications import notify
 from .pdf_export import build_incidents_pdf
@@ -112,6 +113,12 @@ class CreateIncidentRequest(BaseModel):
     title: str = Field(max_length=512)
     description: str | None = Field(default=None, max_length=MAX_TEXT_LENGTH)
     external_ticket_ref: str | None = Field(default=None, max_length=128)
+    affected_user: str | None = Field(default=None, max_length=256)
+
+
+class EmergencyIncidentRequest(BaseModel):
+    title: str = Field(max_length=512)
+    description: str | None = Field(default=None, max_length=MAX_TEXT_LENGTH)
     affected_user: str | None = Field(default=None, max_length=256)
 
 
@@ -224,6 +231,21 @@ async def create_incident(body: CreateIncidentRequest, _user: str = Depends(requ
     return {"incident": incident, "sop": sop}
 
 
+EMERGENCY_ALERT_TYPE = "Major Incident"
+
+
+@app.post("/api/incidents/emergency")
+async def create_emergency_incident(body: EmergencyIncidentRequest, _user: str = Depends(require_auth)):
+    incident = await db.create_incident(EMERGENCY_ALERT_TYPE, body.title, body.description, affected_user=body.affected_user)
+    await db.update_status(incident["id"], "escalated", "Emergency button activated - immediate escalation.")
+    updated = await db.get_incident(incident["id"])
+    await notify(
+        f"\U0001F6A8 MAJOR INCIDENT #{incident['id']}",
+        f"{body.title}\n{body.description or ''}\nCreated and escalated immediately via the Emergency button.",
+    )
+    return {"incident": updated}
+
+
 @app.get("/api/summary")
 async def shift_summary(hours: int = 8, _user: str = Depends(require_auth)):
     return await db.get_shift_summary(hours=max(1, min(hours, 24 * 30)))
@@ -260,7 +282,10 @@ async def get_incident(incident_id: int, _user: str = Depends(require_auth)):
         raise HTTPException(status_code=404, detail="Incident not found.")
     updates = await db.get_updates(incident_id)
     sop = await db.get_sop(incident["alert_type"])
-    return {"incident": incident, "updates": updates, "sop": sop}
+    score = compute_investigation_score(incident, sop, updates)
+    disposition_history = await db.get_disposition_history(incident["alert_type"])
+    return {"incident": incident, "updates": updates, "sop": sop, "investigation_score": score,
+            "disposition_history": disposition_history}
 
 
 @app.post("/api/incidents/{incident_id}/status")
@@ -294,6 +319,11 @@ async def set_awaiting_stakeholder(incident_id: int, body: AwaitingStakeholderRe
 @app.get("/api/rule-book/categories")
 async def rule_book_categories(_user: str = Depends(require_auth)):
     return SOP_CATEGORIES
+
+
+@app.get("/api/disposition-history")
+async def disposition_history(alert_type: str, _user: str = Depends(require_auth)):
+    return await db.get_disposition_history(alert_type)
 
 
 @app.get("/api/sops")

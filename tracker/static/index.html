@@ -130,6 +130,14 @@
   .feed-card-title a:hover { color: var(--accent); }
   .cve-badge { font-family: var(--mono); font-size: 0.66rem; color: var(--malicious); background: rgba(248,113,113,0.12); padding: 0.12rem 0.4rem; border-radius: 5px; margin-right: 0.3rem; display: inline-block; }
 
+  .score-box { background: #070a12; border: 1px solid var(--border); border-radius: 9px; padding: 1rem; margin: 0.6rem 0 1rem; font-size: 0.85rem; }
+  .score-bar-track { background: #050810; border-radius: 100px; height: 8px; overflow: hidden; margin-bottom: 0.8rem; }
+  .score-bar-fill { height: 100%; background: var(--clean); border-radius: 100px; transition: width 0.2s; }
+  .score-item { padding: 0.3rem 0; font-size: 0.83rem; display: flex; align-items: center; gap: 0.5rem; }
+  .score-item .tick { font-family: var(--mono); flex-shrink: 0; }
+  .score-item.done .tick { color: var(--clean); }
+  .score-item.needs_review .tick { color: var(--suspicious); }
+
   .rule-detail { background: #070a12; border: 1px solid var(--border); border-radius: 9px; padding: 1rem; margin: 0.6rem 0 1rem; font-size: 0.85rem; }
   .rule-detail .cat-badge { font-family: var(--mono); font-size: 0.7rem; color: var(--info); background: rgba(56,189,248,0.1); padding: 0.15rem 0.5rem; border-radius: 100px; display: inline-block; margin-bottom: 0.6rem; }
   .rule-detail h4 { font-size: 0.74rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--accent); margin: 0.9rem 0 0.35rem; }
@@ -194,6 +202,7 @@
         <button type="submit" class="secondary" style="flex-shrink:0;">Search</button>
       </form>
       <div style="display:flex; gap:0.6rem;">
+        <button class="danger" id="emergency-btn" title="Create and immediately escalate a major incident ticket">&#x1F6A8; Emergency</button>
         <button class="secondary" id="export-csv-btn">Export CSV</button>
         <button class="secondary" id="export-pdf-btn">Export PDF</button>
         <button class="secondary" id="logout-btn">Log out</button>
@@ -242,6 +251,7 @@
             <textarea id="create-description" style="min-height:60px;"></textarea>
             <button type="submit">Create ticket</button>
           </form>
+          <div id="create-disposition-history" style="display:none; font-size:0.85rem; color:var(--text-dim); margin:0.6rem 0;"></div>
           <div id="create-rule-preview"></div>
         </div>
 
@@ -286,6 +296,11 @@
           <div class="checkbox-line">
             <input type="checkbox" id="detail-awaiting-stakeholder">
             <label for="detail-awaiting-stakeholder" style="margin:0;">Awaiting stakeholder reply</label>
+          </div>
+          <div id="detail-disposition-history" style="display:none; font-size:0.85rem; color:var(--text-dim); margin:0.6rem 0;"></div>
+          <div id="detail-score-wrap" style="display:none;">
+            <label>What did I forget? (closure checklist)</label>
+            <div id="detail-score"></div>
           </div>
           <div id="detail-sop-wrap" style="display:none;">
             <label>SOP for this alert type</label>
@@ -545,6 +560,20 @@
     btn.addEventListener('click', () => activateTab(btn.dataset.tab));
   });
 
+  // --- Emergency button ---
+  document.getElementById('emergency-btn').addEventListener('click', async () => {
+    const title = prompt('Major incident - brief description (this creates a ticket and immediately escalates + alerts via Telegram):');
+    if (!title || !title.trim()) return;
+    try {
+      const result = await api('/api/incidents/emergency', { method: 'POST', body: JSON.stringify({ title: title.trim() }) });
+      showToast(`Major incident #${result.incident.id} created and escalated.`, false);
+      await loadTickets(currentFilter);
+      await loadSummary();
+    } catch (err) {
+      showToast(err.message, true);
+    }
+  });
+
   // --- Export ---
   document.getElementById('export-csv-btn').addEventListener('click', () => {
     window.location.href = '/api/incidents/export';
@@ -640,7 +669,7 @@
     updateCreateRulePreview();
   }
 
-  function updateCreateRulePreview() {
+  async function updateCreateRulePreview() {
     const alertType = document.getElementById('create-alert-type').value;
     const preview = document.getElementById('create-rule-preview');
     clearChildren(preview);
@@ -654,6 +683,23 @@
       const opt = document.createElement('option');
       opt.value = title;
       datalist.appendChild(opt);
+    }
+
+    const historyBox = document.getElementById('create-disposition-history');
+    if (!alertType) { historyBox.style.display = 'none'; return; }
+    try {
+      const dh = await api(`/api/disposition-history?alert_type=${encodeURIComponent(alertType)}`);
+      if (dh.total > 0) {
+        const fp = dh.by_status.false_positive || 0;
+        historyBox.style.display = 'block';
+        historyBox.textContent = fp > 0
+          ? `"${alertType}" has been closed as false positive ${fp} of ${dh.total} time(s) before.`
+          : `"${alertType}" has occurred ${dh.total} time(s) before, never as a false positive.`;
+      } else {
+        historyBox.style.display = 'none';
+      }
+    } catch (err) {
+      historyBox.style.display = 'none';
     }
   }
 
@@ -799,6 +845,46 @@
       sopBox.appendChild(renderRuleDetail(data.sop));
     } else {
       sopWrap.style.display = 'none';
+    }
+
+    const historyBox = document.getElementById('detail-disposition-history');
+    const dh = data.disposition_history;
+    if (dh && dh.total > 0) {
+      const fp = dh.by_status.false_positive || 0;
+      historyBox.style.display = 'block';
+      historyBox.textContent = fp > 0
+        ? `"${data.incident.alert_type}" has been closed as false positive ${fp} of ${dh.total} time(s) before.`
+        : `"${data.incident.alert_type}" has occurred ${dh.total} time(s) before, never as a false positive.`;
+    } else {
+      historyBox.style.display = 'none';
+    }
+
+    const scoreWrap = document.getElementById('detail-score-wrap');
+    const score = data.investigation_score;
+    if (score && score.total_count > 0) {
+      scoreWrap.style.display = 'block';
+      const scoreBox = document.getElementById('detail-score');
+      clearChildren(scoreBox);
+      const box = document.createElement('div');
+      box.className = 'score-box';
+      const track = document.createElement('div'); track.className = 'score-bar-track';
+      const fill = document.createElement('div'); fill.className = 'score-bar-fill'; fill.style.width = score.percent_done + '%';
+      track.appendChild(fill); box.appendChild(track);
+      const summary = document.createElement('div');
+      summary.style.marginBottom = '0.6rem'; summary.style.fontWeight = '600';
+      summary.textContent = `${score.percent_done}% done (${score.done_count}/${score.total_count})`;
+      box.appendChild(summary);
+      for (const item of score.items) {
+        const row = document.createElement('div'); row.className = 'score-item ' + item.status;
+        const tick = document.createElement('span'); tick.className = 'tick';
+        tick.textContent = item.status === 'done' ? '[x]' : '[ ]';
+        row.appendChild(tick);
+        row.appendChild(document.createTextNode(item.item));
+        box.appendChild(row);
+      }
+      scoreBox.appendChild(box);
+    } else {
+      scoreWrap.style.display = 'none';
     }
 
     const updatesList = document.getElementById('detail-updates');

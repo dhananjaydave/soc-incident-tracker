@@ -230,6 +230,19 @@ def _get_user_history_sync(db_path: str, affected_user: str) -> list[dict]:
         conn.close()
 
 
+def _get_disposition_history_sync(db_path: str, alert_type: str) -> dict:
+    conn = _connect(db_path)
+    try:
+        rows = conn.execute(
+            "SELECT status, COUNT(*) as count FROM incidents WHERE alert_type = ? COLLATE NOCASE GROUP BY status",
+            (alert_type,),
+        ).fetchall()
+        by_status = {row["status"]: row["count"] for row in rows}
+        return {"by_status": by_status, "total": sum(by_status.values())}
+    finally:
+        conn.close()
+
+
 def _export_incidents_csv_sync(db_path: str) -> str:
     import csv
     import io
@@ -366,6 +379,9 @@ class TrackerDB:
 
     async def get_user_history(self, affected_user: str) -> list[dict]:
         return await asyncio.to_thread(_get_user_history_sync, self.db_path, affected_user)
+
+    async def get_disposition_history(self, alert_type: str) -> dict:
+        return await asyncio.to_thread(_get_disposition_history_sync, self.db_path, alert_type)
 
     async def export_incidents_csv(self) -> str:
         return await asyncio.to_thread(_export_incidents_csv_sync, self.db_path)

@@ -13,6 +13,7 @@ import re
 
 import httpx
 
+from .daily_digest import build_daily_digest
 from .db import TrackerDB
 
 logger = logging.getLogger(__name__)
@@ -33,6 +34,7 @@ HELP_TEXT = (
     "/note <id> <text> - add an update note\n"
     "/sop <alert type> - show the SOP for that alert type\n"
     "/summary [hours] - shift summary (defaults to 8h)\n"
+    "/digest - daily SOC digest (shift summary + new CVEs + stale tickets)\n"
     "/help - show this message"
 )
 
@@ -130,6 +132,10 @@ async def _handle_summary(db: TrackerDB, args: str) -> str:
     )
 
 
+async def _handle_digest(db: TrackerDB) -> str:
+    return await build_daily_digest(db)
+
+
 async def handle_command(db: TrackerDB, text: str) -> str:
     text = text.strip()
     if not text.startswith("/"):
@@ -155,6 +161,8 @@ async def handle_command(db: TrackerDB, text: str) -> str:
         return await _handle_sop(db, args)
     if command == "summary":
         return await _handle_summary(db, args)
+    if command == "digest":
+        return await _handle_digest(db)
     return f"Unknown command '{command}'. Send /help for commands."
 
 
