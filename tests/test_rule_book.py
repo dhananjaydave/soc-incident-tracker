@@ -52,6 +52,12 @@ async def test_seed_rule_book_sets_category_and_structured(db):
     assert "Entra ID" in sop["structured"]["investigation_steps"][0]
 
 
+async def test_seed_rule_book_includes_common_titles(db):
+    await seed_rule_book(db)
+    sop = await db.get_sop("Azure Risky Sign-in")
+    assert "Impossible travel sign-in detected" in sop["structured"]["common_titles"]
+
+
 async def test_seed_rule_book_does_not_overwrite_existing_customization(db):
     await db.upsert_sop("GP-VPN Brute Force Attempts", "My custom override steps")
     await seed_rule_book(db)

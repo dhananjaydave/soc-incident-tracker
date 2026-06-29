@@ -24,6 +24,11 @@ SOP_CATEGORIES: list[dict[str, str]] = [
 RULE_BOOK: dict[str, dict] = {
     "GP-VPN Brute Force Attempts": {
         "category": "SOP-01: VPN / Authentication / Password Spraying",
+        "common_titles": [
+            "Multiple failed VPN login attempts detected",
+            "VPN brute force from single source IP",
+            "Failed VPN authentication spike",
+        ],
         "description": (
             "Repeated failed VPN logins against one or more accounts from the same source. "
             "Business impact: a successful brute force gives an external actor a foothold "
@@ -67,6 +72,11 @@ RULE_BOOK: dict[str, dict] = {
     },
     "Password Spraying Attempts": {
         "category": "SOP-01: VPN / Authentication / Password Spraying",
+        "common_titles": [
+            "Password spray detected across multiple accounts",
+            "Low-volume credential spray attempt",
+            "Spray attack against multiple users from one source",
+        ],
         "description": (
             "Low-and-slow login attempts against MANY accounts using a small set of common "
             "passwords, designed to stay under per-account lockout thresholds. Business "
@@ -109,6 +119,12 @@ RULE_BOOK: dict[str, dict] = {
     },
     "Azure Risky Sign-in": {
         "category": "SOP-03: Risky Sign-in / Identity Compromise",
+        "common_titles": [
+            "Impossible travel sign-in detected",
+            "Sign-in from anonymous IP",
+            "Leaked credentials risk sign-in",
+            "Unfamiliar sign-in properties flagged",
+        ],
         "description": (
             "Azure AD/Entra ID flagged a sign-in as risky (impossible travel, anonymous IP, "
             "unfamiliar sign-in properties, leaked credentials, etc). Business impact: this is "
@@ -152,6 +168,11 @@ RULE_BOOK: dict[str, dict] = {
     },
     "PingID MFA Spamming": {
         "category": "SOP-02: MFA Abuse / MFA Bypass",
+        "common_titles": [
+            "Unusual volume of MFA push prompts",
+            "Suspected MFA fatigue attack",
+            "Repeated MFA push notifications to user",
+        ],
         "description": (
             "A user is receiving an unusual volume of MFA push prompts they did not initiate "
             "('MFA fatigue' / 'MFA bombing'). Business impact: the attacker already has valid "
@@ -193,6 +214,11 @@ RULE_BOOK: dict[str, dict] = {
     },
     "CrowdStrike High Alert": {
         "category": "SOP-05: CrowdStrike / Endpoint Investigation",
+        "common_titles": [
+            "CrowdStrike high-severity detection",
+            "Suspicious process behavior flagged by Falcon",
+            "Potential malware execution detected",
+        ],
         "description": (
             "CrowdStrike Falcon flagged a high-severity detection on an endpoint (process "
             "injection, credential access, ransomware behavior, etc). Business impact varies "
@@ -236,6 +262,11 @@ RULE_BOOK: dict[str, dict] = {
     },
     "Defender High Alert": {
         "category": "SOP-04: Microsoft Defender Investigation",
+        "common_titles": [
+            "Microsoft Defender high-severity alert",
+            "Suspicious activity flagged by Defender for Endpoint",
+            "Defender for O365 high alert",
+        ],
         "description": (
             "Microsoft Defender (for Endpoint/Office 365/Identity) raised a high-severity "
             "alert. Business impact depends on the Defender product and technique involved - "
@@ -279,6 +310,11 @@ RULE_BOOK: dict[str, dict] = {
     },
     "O365 Phishing Alert": {
         "category": "SOP-06: Phishing / Email Investigation",
+        "common_titles": [
+            "User-reported phishing email",
+            "Suspicious email with credential harvesting link",
+            "Bulk phishing campaign detected in O365",
+        ],
         "description": (
             "A phishing email was reported or auto-flagged in Office 365 (via user report, "
             "Defender for O365, or mail flow rules). Business impact depends entirely on "
@@ -328,4 +364,5 @@ async def seed_rule_book(db: TrackerDB) -> None:
     existing = {s["alert_type"] for s in await db.list_sops()}
     for alert_type, rule in RULE_BOOK.items():
         if alert_type not in existing:
-            await db.upsert_sop(alert_type, rule["steps"], category=rule["category"], structured=rule["structured"])
+            structured = {**rule["structured"], "common_titles": rule.get("common_titles", [])}
+            await db.upsert_sop(alert_type, rule["steps"], category=rule["category"], structured=structured)

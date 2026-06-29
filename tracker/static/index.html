@@ -213,8 +213,12 @@
       <div id="list-view">
         <div class="panel">
           <h2>Shift summary</h2>
-          <div class="field-grid" style="margin-bottom:0.8rem;">
-            <div><label>Window (hours)</label><input id="summary-hours" type="number" value="8" min="1"></div>
+          <p class="lede" style="margin-bottom:0.8rem;">Incident counts for the last N hours - pick a shift length, or set a custom one. Click Refresh to pull the latest counts (tickets created after this loaded won't show until you do).</p>
+          <div style="margin-bottom:0.8rem; display:flex; gap:0.4rem; flex-wrap:wrap; align-items:center;">
+            <button class="secondary shift-preset-btn active" data-hours="8" type="button">8h shift</button>
+            <button class="secondary shift-preset-btn" data-hours="12" type="button">12h shift</button>
+            <button class="secondary shift-preset-btn" data-hours="24" type="button">24h</button>
+            <input id="summary-hours" type="number" value="8" min="1" style="width:90px; margin:0;" title="Custom window in hours">
           </div>
           <button class="secondary" id="load-summary-btn">Refresh</button>
           <div class="stat-grid" id="summary-stats" style="margin-top:1rem;"></div>
@@ -225,7 +229,10 @@
           <form id="create-form">
             <div class="field-grid">
               <div><label>Alert type</label><select id="create-alert-type" required></select></div>
-              <div><label>Title</label><input id="create-title" required></div>
+              <div><label>Title</label>
+                <input id="create-title" list="create-title-suggestions" placeholder="Pick a suggestion or type your own" required>
+                <datalist id="create-title-suggestions"></datalist>
+              </div>
             </div>
             <div class="field-grid">
               <div><label>Affected user (optional)</label><input id="create-user"></div>
@@ -639,6 +646,15 @@
     clearChildren(preview);
     const sop = sopCache.find(s => s.alert_type === alertType);
     if (sop) preview.appendChild(renderRuleDetail(sop));
+
+    const datalist = document.getElementById('create-title-suggestions');
+    clearChildren(datalist);
+    const commonTitles = (sop && sop.structured && sop.structured.common_titles) || [];
+    for (const title of commonTitles) {
+      const opt = document.createElement('option');
+      opt.value = title;
+      datalist.appendChild(opt);
+    }
   }
 
   document.getElementById('create-alert-type').addEventListener('change', updateCreateRulePreview);
@@ -684,6 +700,19 @@
     }
   }
   document.getElementById('load-summary-btn').addEventListener('click', loadSummary);
+
+  document.querySelectorAll('.shift-preset-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.shift-preset-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      document.getElementById('summary-hours').value = btn.dataset.hours;
+      loadSummary();
+    });
+  });
+
+  document.getElementById('summary-hours').addEventListener('change', () => {
+    document.querySelectorAll('.shift-preset-btn').forEach(b => b.classList.remove('active'));
+  });
 
   // --- Tickets ---
   let currentFilter = '';
