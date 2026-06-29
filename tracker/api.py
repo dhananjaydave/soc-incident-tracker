@@ -233,8 +233,8 @@ async def me(user: str = Depends(require_auth)):
 
 
 @app.get("/api/incidents")
-async def list_incidents(status: str | None = None, _user: str = Depends(require_auth)):
-    return await db.list_incidents(status=status)
+async def list_incidents(status: str | None = None, priority: str | None = None, _user: str = Depends(require_auth)):
+    return await db.list_incidents(status=status, priority=priority)
 
 
 @app.post("/api/incidents")
@@ -294,7 +294,9 @@ EMERGENCY_ALERT_TYPE = "Major Incident"
 
 @app.post("/api/incidents/emergency")
 async def create_emergency_incident(body: EmergencyIncidentRequest, _user: str = Depends(require_auth)):
-    incident = await db.create_incident(EMERGENCY_ALERT_TYPE, body.title, body.description, affected_user=body.affected_user)
+    incident = await db.create_incident(
+        EMERGENCY_ALERT_TYPE, body.title, body.description, affected_user=body.affected_user, priority="high",
+    )
     await db.update_status(incident["id"], "escalated", "Emergency button activated - immediate escalation.")
     updated = await db.get_incident(incident["id"])
     await notify(

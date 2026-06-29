@@ -290,12 +290,18 @@
 
         <div class="panel">
           <h2>Tickets</h2>
-          <div style="margin-bottom:0.8rem;">
+          <div style="margin-bottom:0.5rem;">
             <button class="secondary filter-btn active" data-filter="">All</button>
             <button class="secondary filter-btn" data-filter="open">Open</button>
             <button class="secondary filter-btn" data-filter="escalated">Escalated</button>
             <button class="secondary filter-btn" data-filter="resolved">Resolved</button>
             <button class="secondary filter-btn" data-filter="false_positive">False positive</button>
+          </div>
+          <div style="margin-bottom:0.8rem;">
+            <button class="secondary priority-filter-btn active" data-priority-filter="">Any priority</button>
+            <button class="secondary priority-filter-btn" data-priority-filter="high">High</button>
+            <button class="secondary priority-filter-btn" data-priority-filter="medium">Medium</button>
+            <button class="secondary priority-filter-btn" data-priority-filter="low">Low</button>
           </div>
           <ul class="ticket-list" id="ticket-list"></ul>
         </div>
@@ -344,7 +350,7 @@
           </div>
           <div id="detail-disposition-history" style="display:none; font-size:0.85rem; color:var(--text-dim); margin:0.6rem 0;"></div>
           <div id="detail-checklist-wrap">
-            <label>Investigation checklist - what I've done on this ticket</label>
+            <label>Investigation checklist - what I've done on this ticket (this is the % that counts)</label>
             <div class="score-box" id="detail-checklist"></div>
           </div>
           <div id="detail-copilot-wrap" style="display:none;">
@@ -355,7 +361,7 @@
             </div>
           </div>
           <div id="detail-score-wrap" style="display:none;">
-            <label>What did I forget? (closure checklist)</label>
+            <label>Reminders specific to this alert type (reference only - not a separate score)</label>
             <div id="detail-score"></div>
           </div>
           <div id="detail-sop-wrap" style="display:none;">
@@ -912,9 +918,14 @@
 
   // --- Tickets ---
   let currentFilter = '';
+  let currentPriorityFilter = '';
   async function loadTickets(status) {
-    currentFilter = status;
-    const tickets = await api('/api/incidents' + (status ? `?status=${status}` : ''));
+    if (status !== undefined) currentFilter = status;
+    const params = new URLSearchParams();
+    if (currentFilter) params.set('status', currentFilter);
+    if (currentPriorityFilter) params.set('priority', currentPriorityFilter);
+    const qs = params.toString();
+    const tickets = await api('/api/incidents' + (qs ? `?${qs}` : ''));
     const list = document.getElementById('ticket-list');
     clearChildren(list);
     for (const t of tickets) {
@@ -949,6 +960,15 @@
       document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
       btn.classList.add('active');
       loadTickets(btn.dataset.filter);
+    });
+  });
+
+  document.querySelectorAll('.priority-filter-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.priority-filter-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      currentPriorityFilter = btn.dataset.priorityFilter;
+      loadTickets(currentFilter);
     });
   });
 
@@ -1091,13 +1111,9 @@
       clearChildren(scoreBox);
       const box = document.createElement('div');
       box.className = 'score-box';
-      const track = document.createElement('div'); track.className = 'score-bar-track';
-      const fill = document.createElement('div'); fill.className = 'score-bar-fill'; fill.style.width = score.percent_done + '%';
-      track.appendChild(fill); box.appendChild(track);
-      const summary = document.createElement('div');
-      summary.style.marginBottom = '0.6rem'; summary.style.fontWeight = '600';
-      summary.textContent = `${score.percent_done}% done (${score.done_count}/${score.total_count})`;
-      box.appendChild(summary);
+      // No percentage/progress bar here deliberately - this list is
+      // reference reminders auto-detected from existing data, not a
+      // second score competing with the manual checklist above.
       for (const item of score.items) {
         const row = document.createElement('div'); row.className = 'score-item ' + item.status;
         const tick = document.createElement('span'); tick.className = 'tick';

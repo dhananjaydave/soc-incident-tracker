@@ -31,6 +31,7 @@ SOP_CATEGORIES: list[dict[str, str]] = [
     {"id": "SOP-05", "name": "CrowdStrike / Endpoint Investigation"},
     {"id": "SOP-06", "name": "Phishing / Email Investigation"},
     {"id": "SOP-07", "name": "DDoS / Availability"},
+    {"id": "SOP-08", "name": "Major Incident / Crisis Response"},
 ]
 
 # Universal reference, not tied to one rule - how confidence percentages
@@ -805,6 +806,98 @@ RULE_BOOK: dict[str, dict] = {
             ],
             "false_positive_indicators": [
                 "Legitimate traffic spike from a marketing campaign, viral content, or a scheduled batch job - check the business calendar before treating as an attack.",
+            ],
+        },
+    },
+    "Major Incident": {
+        # Created by the Emergency button - deliberately NOT tied to one
+        # MITRE technique, since it's a severity escalation classification
+        # that can apply to any underlying incident type (ransomware, mass
+        # account compromise, data breach, etc), not a specific detection.
+        "category": "SOP-08: Major Incident / Crisis Response",
+        "common_titles": [
+            "Active ransomware spreading",
+            "Confirmed data breach in progress",
+            "Mass account compromise",
+            "Critical service outage with security implications",
+        ],
+        "mitre_techniques": [],
+        "default_priority": "high",
+        "description_template": {
+            "who": "Affected systems/users - scope is often still unknown at creation, update as it's learned",
+            "what": "What's known right now, even if incomplete - this ticket exists because waiting for full categorization wasn't an option",
+            "when": "When you first became aware vs when the activity actually started, if different",
+            "where": "Every affected system/network segment identified so far",
+            "why": "Verdict - this field will evolve fastest of any ticket type as the incident is worked",
+        },
+        "description": (
+            "Created via the Emergency button when something is severe enough to need a ticket and "
+            "escalation immediately, before there's time to identify which specific alert type applies. "
+            "Business impact: by definition, high - this bypasses normal triage specifically because waiting wasn't safe."
+        ),
+        "steps": (
+            "1. Assess scope immediately - what's confirmed affected vs suspected, don't wait for full certainty to start containing.\n"
+            "2. Contain first, investigate in parallel - for a true major incident, speed matters more than process polish.\n"
+            "3. Notify stakeholders/management per your major-incident communication plan - this should already be in flight, not blocked on this ticket.\n"
+            "4. Assign clear ownership - who is the incident commander for this one.\n"
+            "5. Update this ticket regularly as the picture develops - treat it as the running log, not a write-once report.\n"
+            "6. Once contained, identify which specific alert type(s)/technique(s) this actually was, for the post-incident record."
+        ),
+        "detection_engineering": {
+            "name": "Manual Escalation (Emergency Button)",
+            "type": "Analyst-initiated, not an automated detection",
+            "data_sources": ["Analyst judgment - this exists specifically to bypass waiting on automated categorization"],
+            "logic": "No threshold/correlation logic - created directly when an analyst judges something needs immediate ticket creation and escalation.",
+            "confidence_guidance": "By definition the analyst already believes this is real and severe enough to escalate immediately - confidence starts high and is revised down only if early findings contradict it.",
+        },
+        "splunk_queries": [
+            {"name": "Recent activity for an affected host", "query": "index=* host=<host> earliest=-2h | sort -_time"},
+            {"name": "Recent activity for an affected user", "query": "index=* user=<user> earliest=-2h | sort -_time"},
+        ],
+        "ip_check_guide": (
+            "Use the universal Suspicious IP guide (Investigate tab) the same way as any other alert - "
+            "scope and containment speed matter more here than a perfectly thorough IP writeup at this stage."
+        ),
+        "description_sections": {
+            "executive_summary": "The SOC identified an incident assessed as severe enough to require immediate escalation, ahead of full categorization. Containment actions were initiated immediately; investigation continues in parallel.",
+            "findings": ["(update as the investigation develops - this section evolves fastest of any major incident)"],
+            "impact_assessment": "Impact assessment is in progress - update this section as scope is confirmed.",
+            "actions_taken": [
+                "Escalated immediately via the Emergency workflow.",
+                "Began scope assessment.",
+                "Notified relevant stakeholders per the major-incident communication plan.",
+            ],
+            "recommendations": [
+                "Continue containment and scope assessment.",
+                "Schedule a post-incident review once resolved.",
+                "Reclassify under the specific alert type/technique once identified, for the historical record.",
+            ],
+        },
+        "structured": {
+            "investigation_steps": [
+                "Assess scope immediately - confirmed vs suspected, don't wait for certainty to start containing.",
+                "Contain first, investigate in parallel.",
+                "Confirm stakeholder/management notification is in flight.",
+                "Assign clear incident-commander ownership.",
+                "Update the ticket regularly as the picture develops.",
+            ],
+            "required_fields": ["Affected systems/users (best current estimate)", "Containment actions taken", "Incident commander", "Stakeholder notification status"],
+            "escalation_criteria": "Already escalated by definition - this section instead tracks whether it needs to go BEYOND the SOC (legal, executive, external IR firm, law enforcement).",
+            "splunk_query_hint": "index=* host=<host> OR user=<user> earliest=-2h | sort -_time",
+            "containment_actions": [
+                "Isolate/contain affected systems immediately, even with incomplete information.",
+                "Disable/reset credentials for any confirmed-compromised accounts.",
+                "Engage your incident response plan's next steps (legal, comms, executive notification) as applicable.",
+            ],
+            "closure_checklist": [
+                "Final scope documented.",
+                "All stakeholders notified of resolution.",
+                "Reclassified under the specific alert type/technique for the historical record, if applicable.",
+                "Disposition reason recorded.",
+                "Post-incident review scheduled.",
+            ],
+            "false_positive_indicators": [
+                "Extremely rare for this category by design - if it turns out not to be major, document why and consider whether the Emergency button was the right call for next time.",
             ],
         },
     },

@@ -20,18 +20,18 @@ def db():
         yield TrackerDB(db_path=str(Path(tmp) / "test.db"))
 
 
-def test_seven_sop_categories_defined():
-    assert len(SOP_CATEGORIES) == 7
+def test_eight_sop_categories_defined():
+    assert len(SOP_CATEGORIES) == 8
     ids = {c["id"] for c in SOP_CATEGORIES}
-    assert ids == {"SOP-01", "SOP-02", "SOP-03", "SOP-04", "SOP-05", "SOP-06", "SOP-07"}
+    assert ids == {"SOP-01", "SOP-02", "SOP-03", "SOP-04", "SOP-05", "SOP-06", "SOP-07", "SOP-08"}
 
 
-def test_eight_real_rules_defined():
-    assert len(RULE_BOOK) == 8
+def test_nine_real_rules_defined():
+    assert len(RULE_BOOK) == 9
     expected = {
         "GP-VPN Brute Force Attempts", "Password Spraying Attempts", "Azure Risky Sign-in",
         "PingID MFA Spamming", "CrowdStrike High Alert", "Defender High Alert", "O365 Phishing Alert",
-        "DDoS Attack Detected",
+        "DDoS Attack Detected", "Major Incident",
     }
     assert set(RULE_BOOK.keys()) == expected
 
@@ -103,7 +103,7 @@ def test_suspicious_ip_guide_has_steps():
 async def test_seed_rule_book_populates_db(db):
     await seed_rule_book(db)
     sops = await db.list_sops()
-    assert len(sops) == 8
+    assert len(sops) == 9
 
 
 async def test_seed_rule_book_sets_category_and_structured(db):
@@ -164,8 +164,13 @@ def test_all_mapped_mitre_technique_ids_nonempty():
     assert len(ids) > 0
 
 
-def test_every_rule_has_at_least_one_mitre_technique():
+def test_every_rule_has_at_least_one_mitre_technique_except_major_incident():
+    # Major Incident is a severity-escalation classification (anything can
+    # be a major incident), not a specific detection - deliberately has no
+    # fixed MITRE mapping.
     for alert_type, rule in RULE_BOOK.items():
+        if alert_type == "Major Incident":
+            continue
         assert rule.get("mitre_techniques"), f"{alert_type} has no MITRE technique mapping"
 
 

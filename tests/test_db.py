@@ -137,6 +137,25 @@ async def test_list_incidents_filters_by_status(db):
     assert escalated_only[0]["id"] == escalated["id"]
 
 
+async def test_list_incidents_filters_by_priority(db):
+    await db.create_incident("Phishing", "a", priority="low")
+    high = await db.create_incident("System Compromise", "b", priority="high")
+
+    high_only = await db.list_incidents(priority="high")
+    assert len(high_only) == 1
+    assert high_only[0]["id"] == high["id"]
+
+
+async def test_list_incidents_filters_by_status_and_priority_combined(db):
+    await db.create_incident("Phishing", "a", priority="high")
+    escalated_high = await db.create_incident("System Compromise", "b", priority="high")
+    await db.update_status(escalated_high["id"], "escalated")
+
+    result = await db.list_incidents(status="escalated", priority="high")
+    assert len(result) == 1
+    assert result[0]["id"] == escalated_high["id"]
+
+
 async def test_update_status_sets_resolved_at_for_terminal_states(db):
     incident = await db.create_incident("Brute Force", "Many failed logins")
     assert incident["resolved_at"] is None

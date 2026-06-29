@@ -215,15 +215,18 @@ def _get_incident_sync(db_path: str, incident_id: int) -> dict | None:
         conn.close()
 
 
-def _list_incidents_sync(db_path: str, status: str | None) -> list[dict]:
+def _list_incidents_sync(db_path: str, status: str | None, priority: str | None) -> list[dict]:
     conn = _connect(db_path)
     try:
+        clauses, params = [], []
         if status:
-            rows = conn.execute(
-                "SELECT * FROM incidents WHERE status = ? ORDER BY created_at DESC", (status,)
-            ).fetchall()
-        else:
-            rows = conn.execute("SELECT * FROM incidents ORDER BY created_at DESC").fetchall()
+            clauses.append("status = ?")
+            params.append(status)
+        if priority:
+            clauses.append("priority = ?")
+            params.append(priority)
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        rows = conn.execute(f"SELECT * FROM incidents {where} ORDER BY created_at DESC", params).fetchall()
         return [_row_to_incident(r) for r in rows]
     finally:
         conn.close()
@@ -498,8 +501,8 @@ class TrackerDB:
     async def get_incident(self, incident_id: int) -> dict | None:
         return await asyncio.to_thread(_get_incident_sync, self.db_path, incident_id)
 
-    async def list_incidents(self, status: str | None = None) -> list[dict]:
-        return await asyncio.to_thread(_list_incidents_sync, self.db_path, status)
+    async def list_incidents(self, status: str | None = None, priority: str | None = None) -> list[dict]:
+        return await asyncio.to_thread(_list_incidents_sync, self.db_path, status, priority)
 
     async def update_status(self, incident_id: int, status: str, disposition_reason: str | None = None) -> bool:
         if status not in VALID_STATUSES:

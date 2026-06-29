@@ -49,7 +49,7 @@ def _extract_description(cve: dict) -> str:
     return ""
 
 
-async def _fetch_recent_high_severity_cves() -> list[dict]:
+async def _fetch_recent_high_severity_cves(min_cvss: float = MIN_CVSS_SCORE) -> list[dict]:
     now = datetime.now(timezone.utc)
     since = now - timedelta(hours=CVE_LOOKBACK_HOURS)
     params = {
@@ -66,7 +66,7 @@ async def _fetch_recent_high_severity_cves() -> list[dict]:
     for item in data.get("vulnerabilities", []):
         cve = item["cve"]
         score = _extract_cvss_score(cve)
-        if score is not None and score >= MIN_CVSS_SCORE:
+        if score is not None and score >= min_cvss:
             found.append({
                 "id": cve["id"], "cvss": score, "description": _extract_description(cve)[:300],
                 "link": f"https://nvd.nist.gov/vuln/detail/{cve['id']}",

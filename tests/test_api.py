@@ -116,6 +116,16 @@ def test_protected_route_works_after_login(client):
     assert resp.status_code == 200
 
 
+def test_list_incidents_filters_by_priority(client):
+    _login(client)
+    client.post("/api/incidents", json={"alert_type": "Phishing", "title": "a", "priority": "low"})
+    high = client.post("/api/incidents", json={"alert_type": "Phishing", "title": "b", "priority": "high"}).json()["incident"]
+    resp = client.get("/api/incidents", params={"priority": "high"})
+    results = resp.json()
+    assert len(results) == 1
+    assert results[0]["id"] == high["id"]
+
+
 def test_logout_clears_session(client):
     _login(client)
     client.post("/logout")
@@ -330,6 +340,19 @@ def test_emergency_incident_created_already_escalated(client):
     assert incident["status"] == "escalated"
     assert incident["alert_type"] == "Major Incident"
     assert incident["disposition_reason"]
+
+
+def test_emergency_incident_defaults_to_high_priority(client):
+    _login(client)
+    resp = client.post("/api/incidents/emergency", json={"title": "Active ransomware spreading"})
+    assert resp.json()["incident"]["priority"] == "high"
+
+
+def test_emergency_incident_has_rule_book_guidance(client):
+    _login(client)
+    created = client.post("/api/incidents/emergency", json={"title": "Active ransomware spreading"}).json()["incident"]
+    resp = client.get(f"/api/incidents/{created['id']}")
+    assert resp.json()["sop"] is not None
 
 
 def test_emergency_incident_sends_notification(client):
@@ -593,11 +616,11 @@ def test_rule_book_categories_requires_auth(client):
     assert resp.status_code == 401
 
 
-def test_rule_book_categories_returns_seven(client):
+def test_rule_book_categories_returns_eight(client):
     _login(client)
     resp = client.get("/api/rule-book/categories")
     assert resp.status_code == 200
-    assert len(resp.json()) == 7
+    assert len(resp.json()) == 8
 
 
 def test_confidence_scale_requires_auth(client):
