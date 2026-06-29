@@ -319,6 +319,35 @@ def _list_sops_sync(db_path: str) -> list[dict]:
         conn.close()
 
 
+def _search_incidents_sync(db_path: str, query: str, limit: int) -> list[dict]:
+    conn = _connect(db_path)
+    try:
+        pattern = f"%{query}%"
+        rows = conn.execute(
+            "SELECT * FROM incidents WHERE alert_type LIKE ? COLLATE NOCASE OR title LIKE ? COLLATE NOCASE "
+            "OR description LIKE ? COLLATE NOCASE OR affected_user LIKE ? COLLATE NOCASE "
+            "OR external_ticket_ref LIKE ? COLLATE NOCASE ORDER BY created_at DESC LIMIT ?",
+            (pattern, pattern, pattern, pattern, pattern, limit),
+        ).fetchall()
+        return [_row_to_incident(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def _search_sops_sync(db_path: str, query: str, limit: int) -> list[dict]:
+    conn = _connect(db_path)
+    try:
+        pattern = f"%{query}%"
+        rows = conn.execute(
+            "SELECT * FROM sops WHERE alert_type LIKE ? COLLATE NOCASE OR category LIKE ? COLLATE NOCASE "
+            "ORDER BY alert_type ASC LIMIT ?",
+            (pattern, pattern, limit),
+        ).fetchall()
+        return [_row_to_sop(r) for r in rows]
+    finally:
+        conn.close()
+
+
 class TrackerDB:
     def __init__(self, db_path: str | None = None) -> None:
         self.db_path = db_path or DEFAULT_DB_PATH
@@ -383,3 +412,9 @@ class TrackerDB:
 
     async def list_sops(self) -> list[dict]:
         return await asyncio.to_thread(_list_sops_sync, self.db_path)
+
+    async def search_incidents(self, query: str, limit: int = 20) -> list[dict]:
+        return await asyncio.to_thread(_search_incidents_sync, self.db_path, query, limit)
+
+    async def search_sops(self, query: str, limit: int = 20) -> list[dict]:
+        return await asyncio.to_thread(_search_sops_sync, self.db_path, query, limit)

@@ -1,4 +1,4 @@
-from tracker.mitre_knowledge import MITRE_TECHNIQUES, get_technique, list_techniques
+from tracker.mitre_knowledge import MITRE_TECHNIQUES, get_technique, list_techniques, search_techniques
 
 
 def test_get_technique_found():
@@ -40,3 +40,24 @@ def test_every_technique_id_matches_mitre_format():
     import re
     for tid in MITRE_TECHNIQUES:
         assert re.match(r"^T\d{4}$", tid), f"{tid} doesn't match expected MITRE ID format"
+
+
+def test_search_techniques_matches_id():
+    results = search_techniques("t1055")
+    assert any(r["id"] == "T1055" for r in results)
+
+
+def test_search_techniques_matches_name():
+    results = search_techniques("phishing")
+    assert any(r["name"] == "Phishing" for r in results)
+
+
+def test_search_techniques_matches_tactic():
+    results = search_techniques("exfiltration")
+    assert all(r["tactic"].lower().count("exfiltration") or "exfiltration" in r["name"].lower() for r in results)
+    assert len(results) > 0
+
+
+def test_search_techniques_no_match_returns_empty():
+    results = search_techniques("nonexistent-query-xyz")
+    assert results == []

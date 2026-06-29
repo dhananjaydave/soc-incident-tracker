@@ -39,6 +39,57 @@ async def test_check_stale_tickets_no_notification_when_nothing_stale(db):
         mock_notify.assert_not_called()
 
 
+async def test_check_cve_and_kev_notifies_for_each_finding(db):
+    fake_cve = {"id": "CVE-2026-0001", "cvss": 9.8, "description": "desc", "link": "https://example.com"}
+    fake_kev = {"id": "CVE-2026-0002", "name": "Exploited thing", "date_added": "2026-06-29", "link": "https://example.com"}
+    with patch("tracker.scheduler.cve_monitor.check_for_new_cves", new_callable=AsyncMock, return_value=[fake_cve]), \
+         patch("tracker.scheduler.cve_monitor.check_for_new_kev_entries", new_callable=AsyncMock, return_value=[fake_kev]), \
+         patch("tracker.scheduler.notify", new_callable=AsyncMock) as mock_notify:
+        await scheduler.check_cve_and_kev(db)
+
+    assert mock_notify.call_count == 2
+
+
+async def test_check_cve_and_kev_no_notification_when_nothing_new(db):
+    with patch("tracker.scheduler.cve_monitor.check_for_new_cves", new_callable=AsyncMock, return_value=[]), \
+         patch("tracker.scheduler.cve_monitor.check_for_new_kev_entries", new_callable=AsyncMock, return_value=[]), \
+         patch("tracker.scheduler.notify", new_callable=AsyncMock) as mock_notify:
+        await scheduler.check_cve_and_kev(db)
+
+    mock_notify.assert_not_called()
+
+
+async def test_check_internal_tools_notifies_on_newly_down(monkeypatch):
+    monkeypatch.setattr(scheduler, "_previously_down", set())
+    with patch("tracker.scheduler.health_check.check_internal_tools", new_callable=AsyncMock, return_value=["IOC Enrichment"]), \
+         patch("tracker.scheduler.notify", new_callable=AsyncMock) as mock_notify:
+        await scheduler.check_internal_tools()
+
+    mock_notify.assert_called_once()
+    assert "unreachable" in mock_notify.call_args[0][0].lower()
+    assert scheduler._previously_down == {"IOC Enrichment"}
+
+
+async def test_check_internal_tools_no_renotify_while_still_down(monkeypatch):
+    monkeypatch.setattr(scheduler, "_previously_down", {"IOC Enrichment"})
+    with patch("tracker.scheduler.health_check.check_internal_tools", new_callable=AsyncMock, return_value=["IOC Enrichment"]), \
+         patch("tracker.scheduler.notify", new_callable=AsyncMock) as mock_notify:
+        await scheduler.check_internal_tools()
+
+    mock_notify.assert_not_called()
+
+
+async def test_check_internal_tools_notifies_on_recovery(monkeypatch):
+    monkeypatch.setattr(scheduler, "_previously_down", {"IOC Enrichment"})
+    with patch("tracker.scheduler.health_check.check_internal_tools", new_callable=AsyncMock, return_value=[]), \
+         patch("tracker.scheduler.notify", new_callable=AsyncMock) as mock_notify:
+        await scheduler.check_internal_tools()
+
+    mock_notify.assert_called_once()
+    assert "recovered" in mock_notify.call_args[0][0].lower()
+    assert scheduler._previously_down == set()
+
+
 async def test_start_scheduler_is_idempotent(db):
     scheduler.start_scheduler(db)
     try:

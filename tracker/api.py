@@ -7,6 +7,7 @@ Run locally:   uvicorn tracker.api:app --reload
 
 from __future__ import annotations
 
+import asyncio
 import os
 import time
 from contextlib import asynccontextmanager
@@ -18,12 +19,12 @@ from pydantic import BaseModel, Field
 
 from . import auth, integrations, telegram_bot
 from .db import TrackerDB
-from .mitre_knowledge import get_technique, list_techniques
+from .mitre_knowledge import get_technique, list_techniques, search_techniques
 from .notifications import notify
 from .pdf_export import build_incidents_pdf
 from .rule_book import SOP_CATEGORIES, seed_rule_book
 from .scheduler import start_scheduler, stop_scheduler
-from .security_feed import fetch_all_feeds
+from .security_feed import fetch_all_feeds, merge_latest
 from .seed_sops import seed_default_sops
 
 db = TrackerDB()
@@ -324,6 +325,21 @@ async def mitre_detail(technique_id: str, _user: str = Depends(require_auth)):
 @app.get("/api/feed")
 async def security_feed(_user: str = Depends(require_auth)):
     return await fetch_all_feeds()
+
+
+@app.get("/api/feed/latest")
+async def security_feed_latest(limit: int = 12, _user: str = Depends(require_auth)):
+    results = await fetch_all_feeds()
+    return merge_latest(results, limit=max(1, min(limit, 50)))
+
+
+@app.get("/api/search")
+async def global_search(q: str, _user: str = Depends(require_auth)):
+    q = q.strip()
+    if not q:
+        return {"incidents": [], "sops": [], "mitre": []}
+    incidents, sops = await asyncio.gather(db.search_incidents(q), db.search_sops(q))
+    return {"incidents": incidents, "sops": sops, "mitre": search_techniques(q)}
 
 
 @app.get("/api/investigate/ioc")

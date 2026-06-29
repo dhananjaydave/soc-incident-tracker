@@ -178,6 +178,57 @@ async def test_list_sops(db):
     assert len(sops) == 2
 
 
+async def test_search_incidents_matches_title(db):
+    await db.create_incident("Phishing", "Suspicious email about invoice")
+    await db.create_incident("Brute Force", "Many failed VPN logins")
+    results = await db.search_incidents("invoice")
+    assert len(results) == 1
+    assert "invoice" in results[0]["title"]
+
+
+async def test_search_incidents_matches_alert_type(db):
+    await db.create_incident("Azure Risky Sign-in", "test")
+    results = await db.search_incidents("risky sign-in")
+    assert len(results) == 1
+
+
+async def test_search_incidents_matches_affected_user(db):
+    await db.create_incident("Phishing", "test", affected_user="jdoe")
+    results = await db.search_incidents("jdoe")
+    assert len(results) == 1
+
+
+async def test_search_incidents_case_insensitive(db):
+    await db.create_incident("Phishing", "URGENT Email From CEO")
+    results = await db.search_incidents("urgent")
+    assert len(results) == 1
+
+
+async def test_search_incidents_no_match_returns_empty(db):
+    await db.create_incident("Phishing", "test")
+    results = await db.search_incidents("nonexistent-query-xyz")
+    assert results == []
+
+
+async def test_search_incidents_respects_limit(db):
+    for i in range(10):
+        await db.create_incident("Phishing", f"matching ticket {i}")
+    results = await db.search_incidents("matching", limit=3)
+    assert len(results) == 3
+
+
+async def test_search_sops_matches_alert_type(db):
+    await db.upsert_sop("Azure Risky Sign-in", "steps", category="SOP-03: Risky Sign-in")
+    results = await db.search_sops("risky")
+    assert len(results) == 1
+
+
+async def test_search_sops_matches_category(db):
+    await db.upsert_sop("Custom Rule", "steps", category="SOP-02: MFA Abuse")
+    results = await db.search_sops("MFA")
+    assert len(results) == 1
+
+
 async def test_sop_with_structured_rule_book_fields(db):
     structured = {
         "investigation_steps": ["Check source IP", "Review auth logs"],

@@ -425,6 +425,61 @@ def test_feed_returns_results(client):
     assert resp.json() == fake_result
 
 
+def test_feed_latest_requires_auth(client):
+    resp = client.get("/api/feed/latest")
+    assert resp.status_code == 401
+
+
+def test_feed_latest_returns_merged_results(client):
+    _login(client)
+    fake_result = [{"source": "Test Source", "status": "ok", "entries": [
+        {"title": "x", "link": "y", "published_iso": "2026-01-01T00:00:00+00:00"},
+    ]}]
+    with patch("tracker.api.fetch_all_feeds", new_callable=AsyncMock, return_value=fake_result):
+        resp = client.get("/api/feed/latest")
+    assert resp.status_code == 200
+    assert resp.json()[0]["title"] == "x"
+    assert resp.json()[0]["source"] == "Test Source"
+
+
+def test_feed_latest_respects_limit_param(client):
+    _login(client)
+    fake_result = [{"source": "S", "status": "ok", "entries": [
+        {"title": f"item {i}", "published_iso": "2026-01-01T00:00:00+00:00"} for i in range(20)
+    ]}]
+    with patch("tracker.api.fetch_all_feeds", new_callable=AsyncMock, return_value=fake_result):
+        resp = client.get("/api/feed/latest", params={"limit": 3})
+    assert len(resp.json()) == 3
+
+
+def test_global_search_requires_auth(client):
+    resp = client.get("/api/search", params={"q": "phishing"})
+    assert resp.status_code == 401
+
+
+def test_global_search_empty_query_returns_empty_results(client):
+    _login(client)
+    resp = client.get("/api/search", params={"q": "  "})
+    assert resp.json() == {"incidents": [], "sops": [], "mitre": []}
+
+
+def test_global_search_finds_incident_and_mitre_and_sop(client):
+    _login(client)
+    client.post("/api/incidents", json={"alert_type": "Phishing", "title": "Suspicious phishing email"})
+    resp = client.get("/api/search", params={"q": "phishing"})
+    body = resp.json()
+    assert len(body["incidents"]) >= 1
+    assert len(body["sops"]) >= 1
+    assert any(t["name"] == "Phishing" for t in body["mitre"])
+
+
+def test_global_search_no_match_returns_empty_lists(client):
+    _login(client)
+    resp = client.get("/api/search", params={"q": "totally-nonexistent-xyz123"})
+    body = resp.json()
+    assert body == {"incidents": [], "sops": [], "mitre": []}
+
+
 def test_investigate_ioc_requires_auth(client):
     resp = client.get("/api/investigate/ioc", params={"indicator": "1.2.3.4"})
     assert resp.status_code == 401

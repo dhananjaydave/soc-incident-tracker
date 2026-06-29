@@ -85,3 +85,56 @@ async def test_fetch_all_feeds_bypasses_cache_when_disabled(monkeypatch):
         await security_feed.fetch_all_feeds(use_cache=False)
 
     assert call_count["n"] == len(security_feed.FEED_SOURCES) * 2
+
+
+def test_extract_image_from_enclosure():
+    entry = _FakeEntry(enclosures=[{"type": "image/jpeg", "href": "https://example.com/pic.jpg"}])
+    assert security_feed._extract_image(entry) == "https://example.com/pic.jpg"
+
+
+def test_extract_image_returns_none_when_no_image_enclosure():
+    entry = _FakeEntry(enclosures=[{"type": "application/pdf", "href": "https://example.com/doc.pdf"}])
+    assert security_feed._extract_image(entry) is None
+
+
+def test_extract_image_returns_none_when_no_enclosures():
+    assert security_feed._extract_image(_FakeEntry()) is None
+
+
+def test_extract_cve_ids_finds_single_cve():
+    assert security_feed._extract_cve_ids("Critical RCE in Widget (CVE-2026-12345)") == ["CVE-2026-12345"]
+
+
+def test_extract_cve_ids_finds_multiple_and_dedupes():
+    title = "CVE-2026-1111 and cve-2026-1111 both patched, plus CVE-2025-9999"
+    assert security_feed._extract_cve_ids(title) == ["CVE-2025-9999", "CVE-2026-1111"]
+
+
+def test_extract_cve_ids_empty_when_none_present():
+    assert security_feed._extract_cve_ids("No vulnerabilities mentioned here") == []
+
+
+def test_merge_latest_sorts_by_recency_across_sources():
+    results = [
+        {"source": "A", "entries": [{"title": "Older", "published_iso": "2026-01-01T00:00:00+00:00"}]},
+        {"source": "B", "entries": [{"title": "Newer", "published_iso": "2026-06-01T00:00:00+00:00"}]},
+    ]
+    merged = security_feed.merge_latest(results)
+    assert merged[0]["title"] == "Newer"
+    assert merged[1]["title"] == "Older"
+
+
+def test_merge_latest_respects_limit():
+    results = [{"source": "A", "entries": [{"title": f"Item {i}", "published_iso": "2026-01-01T00:00:00+00:00"} for i in range(20)]}]
+    merged = security_feed.merge_latest(results, limit=5)
+    assert len(merged) == 5
+
+
+def test_merge_latest_entries_with_no_date_sort_last():
+    results = [
+        {"source": "A", "entries": [{"title": "No date", "published_iso": None}]},
+        {"source": "B", "entries": [{"title": "Has date", "published_iso": "2026-01-01T00:00:00+00:00"}]},
+    ]
+    merged = security_feed.merge_latest(results)
+    assert merged[0]["title"] == "Has date"
+    assert merged[1]["title"] == "No date"

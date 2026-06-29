@@ -120,6 +120,16 @@
   .feed-entry a { color: var(--text); text-decoration: none; }
   .feed-entry a:hover { color: var(--accent); }
 
+  .feed-latest-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 0.9rem; }
+  .feed-card { background: #070a12; border: 1px solid var(--border); border-radius: 9px; overflow: hidden; display: flex; flex-direction: column; }
+  .feed-card-img { width: 100%; height: 110px; object-fit: cover; display: block; background: #0d111c; }
+  .feed-card-icon { width: 100%; height: 110px; display: flex; align-items: center; justify-content: center; background: #0d111c; color: var(--text-dim); font-family: var(--mono); font-size: 0.74rem; text-transform: uppercase; letter-spacing: 0.05em; text-align: center; padding: 0 0.5rem; }
+  .feed-card-body { padding: 0.7rem 0.8rem; flex: 1; display: flex; flex-direction: column; gap: 0.4rem; }
+  .feed-card-source { font-size: 0.68rem; color: var(--info); text-transform: uppercase; letter-spacing: 0.04em; }
+  .feed-card-title a { color: var(--text); text-decoration: none; font-size: 0.84rem; line-height: 1.4; }
+  .feed-card-title a:hover { color: var(--accent); }
+  .cve-badge { font-family: var(--mono); font-size: 0.66rem; color: var(--malicious); background: rgba(248,113,113,0.12); padding: 0.12rem 0.4rem; border-radius: 5px; margin-right: 0.3rem; display: inline-block; }
+
   .rule-detail { background: #070a12; border: 1px solid var(--border); border-radius: 9px; padding: 1rem; margin: 0.6rem 0 1rem; font-size: 0.85rem; }
   .rule-detail .cat-badge { font-family: var(--mono); font-size: 0.7rem; color: var(--info); background: rgba(56,189,248,0.1); padding: 0.15rem 0.5rem; border-radius: 100px; display: inline-block; margin-bottom: 0.6rem; }
   .rule-detail h4 { font-size: 0.74rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--accent); margin: 0.9rem 0 0.35rem; }
@@ -179,6 +189,10 @@
         <h1>SOC Incident Tracker<span class="dot">.</span></h1>
         <p class="lede">Logged in as <span id="whoami"></span></p>
       </div>
+      <form id="global-search-form" style="display:flex; gap:0.5rem; flex:1; max-width:380px; min-width:220px;">
+        <input id="global-search-input" placeholder="Search tickets, SOPs, MITRE..." style="margin-bottom:0;">
+        <button type="submit" class="secondary" style="flex-shrink:0;">Search</button>
+      </form>
       <div style="display:flex; gap:0.6rem;">
         <button class="secondary" id="export-csv-btn">Export CSV</button>
         <button class="secondary" id="export-pdf-btn">Export PDF</button>
@@ -302,10 +316,14 @@
 
     <div class="tab-content" id="tab-feed">
       <div class="panel">
-        <h2>Security news corner</h2>
-        <p class="lede" style="margin-bottom:1rem;">Refreshed every 30 minutes from free public sources.</p>
+        <h2>Latest, across all sources</h2>
+        <p class="lede" style="margin-bottom:1rem;">Refreshed every 30 minutes from 7 free public sources. CVE IDs found in a headline are highlighted automatically.</p>
         <button class="secondary" id="load-feed-btn">Load feed</button>
-        <div id="feed-content" style="margin-top:1rem;"></div>
+        <div class="feed-latest-grid" id="feed-latest-grid" style="margin-top:1rem;"></div>
+      </div>
+      <div class="panel">
+        <h2>By source</h2>
+        <div id="feed-content"></div>
       </div>
     </div>
 
@@ -369,6 +387,25 @@
           <input type="password" id="cp-new" autocomplete="new-password" minlength="12" required>
           <button type="submit">Change password</button>
         </form>
+      </div>
+    </div>
+
+    <div class="tab-content" id="tab-search">
+      <div class="panel">
+        <h2>Search results for "<span id="search-query-display"></span>"</h2>
+        <div id="search-no-results" style="display:none;" class="lede">No matches in tickets, SOPs, or MITRE techniques.</div>
+        <div id="search-incidents-section" style="display:none;">
+          <h3 style="font-size:0.8rem; color:var(--text-dim); text-transform:uppercase; letter-spacing:0.05em; margin:1rem 0 0.5rem;">Tickets</h3>
+          <ul class="ticket-list" id="search-incidents-list"></ul>
+        </div>
+        <div id="search-sops-section" style="display:none;">
+          <h3 style="font-size:0.8rem; color:var(--text-dim); text-transform:uppercase; letter-spacing:0.05em; margin:1rem 0 0.5rem;">Rule Book / SOPs</h3>
+          <ul class="updates-list" id="search-sops-list"></ul>
+        </div>
+        <div id="search-mitre-section" style="display:none;">
+          <h3 style="font-size:0.8rem; color:var(--text-dim); text-transform:uppercase; letter-spacing:0.05em; margin:1rem 0 0.5rem;">MITRE Techniques</h3>
+          <div class="mitre-grid" id="search-mitre-grid"></div>
+        </div>
       </div>
     </div>
 
@@ -460,13 +497,16 @@
   });
 
   // --- Tabs ---
+  function activateTab(name) {
+    document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+    const btn = document.querySelector(`.tab-btn[data-tab="${name}"]`);
+    if (btn) btn.classList.add('active');
+    document.getElementById('tab-' + name).classList.add('active');
+  }
+
   document.querySelectorAll('.tab-btn').forEach(btn => {
-    btn.addEventListener('click', () => {
-      document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
-      document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
-      btn.classList.add('active');
-      document.getElementById('tab-' + btn.dataset.tab).classList.add('active');
-    });
+    btn.addEventListener('click', () => activateTab(btn.dataset.tab));
   });
 
   // --- Export ---
@@ -808,11 +848,57 @@
   });
 
   // --- Security feed ---
+  function appendCveBadges(container, cveIds) {
+    for (const cve of (cveIds || [])) {
+      const badge = document.createElement('span');
+      badge.className = 'cve-badge'; badge.textContent = cve;
+      container.appendChild(badge);
+    }
+  }
+
+  function buildFeedCard(entry) {
+    const card = document.createElement('div');
+    card.className = 'feed-card';
+    if (entry.image) {
+      const img = document.createElement('img');
+      img.className = 'feed-card-img'; img.src = entry.image; img.alt = '';
+      img.loading = 'lazy';
+      img.onerror = () => { img.style.display = 'none'; };
+      card.appendChild(img);
+    } else {
+      const icon = document.createElement('div');
+      icon.className = 'feed-card-icon'; icon.textContent = entry.source;
+      card.appendChild(icon);
+    }
+    const body = document.createElement('div'); body.className = 'feed-card-body';
+    const src = document.createElement('div'); src.className = 'feed-card-source'; src.textContent = entry.source;
+    body.appendChild(src);
+    if (entry.cve_ids && entry.cve_ids.length) {
+      const cveRow = document.createElement('div');
+      appendCveBadges(cveRow, entry.cve_ids);
+      body.appendChild(cveRow);
+    }
+    const titleDiv = document.createElement('div'); titleDiv.className = 'feed-card-title';
+    const a = document.createElement('a');
+    a.href = entry.link; a.target = '_blank'; a.rel = 'noopener noreferrer'; a.textContent = entry.title;
+    titleDiv.appendChild(a);
+    body.appendChild(titleDiv);
+    card.appendChild(body);
+    return card;
+  }
+
   document.getElementById('load-feed-btn').addEventListener('click', async () => {
     const btn = document.getElementById('load-feed-btn');
     btn.disabled = true; btn.textContent = 'Loading...';
     try {
-      const results = await api('/api/feed');
+      const [results, latest] = await Promise.all([api('/api/feed'), api('/api/feed/latest?limit=12')]);
+
+      const latestGrid = document.getElementById('feed-latest-grid');
+      clearChildren(latestGrid);
+      for (const entry of latest) {
+        latestGrid.appendChild(buildFeedCard(entry));
+      }
+
       const container = document.getElementById('feed-content');
       clearChildren(container);
       for (const source of results) {
@@ -828,6 +914,7 @@
           for (const entry of source.entries) {
             const div = document.createElement('div');
             div.className = 'feed-entry';
+            appendCveBadges(div, entry.cve_ids);
             const a = document.createElement('a');
             a.href = entry.link; a.target = '_blank'; a.rel = 'noopener noreferrer';
             a.textContent = entry.title;
@@ -969,6 +1056,68 @@
       showToast(err.message, true);
     }
   });
+
+  // --- Global search ---
+  document.getElementById('global-search-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const query = document.getElementById('global-search-input').value.trim();
+    if (!query) return;
+    try {
+      const results = await api(`/api/search?q=${encodeURIComponent(query)}`);
+      renderSearchResults(query, results);
+      activateTab('search');
+    } catch (err) {
+      showToast(err.message, true);
+    }
+  });
+
+  function renderSearchResults(query, results) {
+    document.getElementById('search-query-display').textContent = query;
+    const hasAny = results.incidents.length || results.sops.length || results.mitre.length;
+    document.getElementById('search-no-results').style.display = hasAny ? 'none' : 'block';
+
+    const incSection = document.getElementById('search-incidents-section');
+    const incList = document.getElementById('search-incidents-list');
+    clearChildren(incList);
+    incSection.style.display = results.incidents.length ? 'block' : 'none';
+    for (const t of results.incidents) {
+      const li = document.createElement('li');
+      const left = document.createElement('span');
+      left.className = 'ticket-left';
+      left.textContent = `#${t.id} [${t.alert_type}] ${t.title}`;
+      const badge = document.createElement('span');
+      badge.className = 'status-badge status-' + t.status;
+      badge.textContent = t.status.replace('_', ' ');
+      li.appendChild(left); li.appendChild(badge);
+      li.addEventListener('click', () => { activateTab('tickets'); showDetail(t.id); });
+      incList.appendChild(li);
+    }
+
+    const sopSection = document.getElementById('search-sops-section');
+    const sopList = document.getElementById('search-sops-list');
+    clearChildren(sopList);
+    sopSection.style.display = results.sops.length ? 'block' : 'none';
+    for (const sop of results.sops) {
+      const li = document.createElement('li');
+      li.appendChild(renderRuleDetail(sop));
+      sopList.appendChild(li);
+    }
+
+    const mitreSection = document.getElementById('search-mitre-section');
+    const mitreGrid = document.getElementById('search-mitre-grid');
+    clearChildren(mitreGrid);
+    mitreSection.style.display = results.mitre.length ? 'block' : 'none';
+    for (const t of results.mitre) {
+      const card = document.createElement('div');
+      card.className = 'mitre-card';
+      const id = document.createElement('div'); id.className = 'id'; id.textContent = t.id;
+      const name = document.createElement('div'); name.className = 'name'; name.textContent = t.name;
+      const tactic = document.createElement('div'); tactic.className = 'tactic'; tactic.textContent = t.tactic;
+      card.appendChild(id); card.appendChild(name); card.appendChild(tactic);
+      card.addEventListener('click', () => { activateTab('knowledge'); showMitreDetail(t.id); });
+      mitreGrid.appendChild(card);
+    }
+  }
 
   // On load, check if already logged in (session cookie still valid).
   api('/api/me').then(showDashboard).catch(() => showLogin());
