@@ -243,6 +243,19 @@ def _get_disposition_history_sync(db_path: str, alert_type: str) -> dict:
         conn.close()
 
 
+def _get_similar_incidents_sync(db_path: str, alert_type: str, exclude_id: int, limit: int) -> list[dict]:
+    conn = _connect(db_path)
+    try:
+        rows = conn.execute(
+            "SELECT * FROM incidents WHERE alert_type = ? COLLATE NOCASE AND id != ? "
+            "ORDER BY created_at DESC LIMIT ?",
+            (alert_type, exclude_id, limit),
+        ).fetchall()
+        return [_row_to_incident(r) for r in rows]
+    finally:
+        conn.close()
+
+
 def _export_incidents_csv_sync(db_path: str) -> str:
     import csv
     import io
@@ -382,6 +395,9 @@ class TrackerDB:
 
     async def get_disposition_history(self, alert_type: str) -> dict:
         return await asyncio.to_thread(_get_disposition_history_sync, self.db_path, alert_type)
+
+    async def get_similar_incidents(self, alert_type: str, exclude_id: int, limit: int = 3) -> list[dict]:
+        return await asyncio.to_thread(_get_similar_incidents_sync, self.db_path, alert_type, exclude_id, limit)
 
     async def export_incidents_csv(self) -> str:
         return await asyncio.to_thread(_export_incidents_csv_sync, self.db_path)

@@ -367,6 +367,36 @@ async def test_disposition_history_case_insensitive(db):
     assert history["total"] == 1
 
 
+async def test_get_similar_incidents_excludes_self(db):
+    a = await db.create_incident("Phishing", "a")
+    b = await db.create_incident("Phishing", "b")
+    similar = await db.get_similar_incidents("Phishing", exclude_id=a["id"])
+    ids = [s["id"] for s in similar]
+    assert a["id"] not in ids
+    assert b["id"] in ids
+
+
+async def test_get_similar_incidents_filters_by_alert_type(db):
+    a = await db.create_incident("Phishing", "a")
+    await db.create_incident("Brute Force", "b")
+    similar = await db.get_similar_incidents("Brute Force", exclude_id=a["id"])
+    assert all(s["alert_type"] == "Brute Force" for s in similar)
+
+
+async def test_get_similar_incidents_respects_limit(db):
+    a = await db.create_incident("Phishing", "first")
+    for i in range(5):
+        await db.create_incident("Phishing", f"dup {i}")
+    similar = await db.get_similar_incidents("Phishing", exclude_id=a["id"], limit=2)
+    assert len(similar) == 2
+
+
+async def test_get_similar_incidents_empty_when_no_others(db):
+    a = await db.create_incident("Phishing", "only one")
+    similar = await db.get_similar_incidents("Phishing", exclude_id=a["id"])
+    assert similar == []
+
+
 async def test_export_csv_empty_db_has_header_only(db):
     csv_text = await db.export_incidents_csv()
     lines = csv_text.strip().splitlines()

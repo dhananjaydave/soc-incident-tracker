@@ -29,6 +29,7 @@ RULE_BOOK: dict[str, dict] = {
             "VPN brute force from single source IP",
             "Failed VPN authentication spike",
         ],
+        "mitre_techniques": ["T1110", "T1133"],
         "description": (
             "Repeated failed VPN logins against one or more accounts from the same source. "
             "Business impact: a successful brute force gives an external actor a foothold "
@@ -77,6 +78,7 @@ RULE_BOOK: dict[str, dict] = {
             "Low-volume credential spray attempt",
             "Spray attack against multiple users from one source",
         ],
+        "mitre_techniques": ["T1110"],
         "description": (
             "Low-and-slow login attempts against MANY accounts using a small set of common "
             "passwords, designed to stay under per-account lockout thresholds. Business "
@@ -125,6 +127,7 @@ RULE_BOOK: dict[str, dict] = {
             "Leaked credentials risk sign-in",
             "Unfamiliar sign-in properties flagged",
         ],
+        "mitre_techniques": ["T1078", "T1114"],
         "description": (
             "Azure AD/Entra ID flagged a sign-in as risky (impossible travel, anonymous IP, "
             "unfamiliar sign-in properties, leaked credentials, etc). Business impact: this is "
@@ -173,6 +176,7 @@ RULE_BOOK: dict[str, dict] = {
             "Suspected MFA fatigue attack",
             "Repeated MFA push notifications to user",
         ],
+        "mitre_techniques": ["T1621", "T1111"],
         "description": (
             "A user is receiving an unusual volume of MFA push prompts they did not initiate "
             "('MFA fatigue' / 'MFA bombing'). Business impact: the attacker already has valid "
@@ -219,6 +223,7 @@ RULE_BOOK: dict[str, dict] = {
             "Suspicious process behavior flagged by Falcon",
             "Potential malware execution detected",
         ],
+        "mitre_techniques": ["T1055", "T1059", "T1027"],
         "description": (
             "CrowdStrike Falcon flagged a high-severity detection on an endpoint (process "
             "injection, credential access, ransomware behavior, etc). Business impact varies "
@@ -267,6 +272,7 @@ RULE_BOOK: dict[str, dict] = {
             "Suspicious activity flagged by Defender for Endpoint",
             "Defender for O365 high alert",
         ],
+        "mitre_techniques": ["T1059", "T1078", "T1566"],
         "description": (
             "Microsoft Defender (for Endpoint/Office 365/Identity) raised a high-severity "
             "alert. Business impact depends on the Defender product and technique involved - "
@@ -315,6 +321,7 @@ RULE_BOOK: dict[str, dict] = {
             "Suspicious email with credential harvesting link",
             "Bulk phishing campaign detected in O365",
         ],
+        "mitre_techniques": ["T1566", "T1204"],
         "description": (
             "A phishing email was reported or auto-flagged in Office 365 (via user report, "
             "Defender for O365, or mail flow rules). Business impact depends entirely on "
@@ -360,9 +367,23 @@ RULE_BOOK: dict[str, dict] = {
 }
 
 
+def all_mapped_mitre_technique_ids() -> set[str]:
+    """Every MITRE technique ID referenced anywhere in the Rule Book -
+    the basis for the Detection Gap Analyzer (which of the 55 curated
+    techniques have NO rule covering them yet)."""
+    ids: set[str] = set()
+    for rule in RULE_BOOK.values():
+        ids.update(rule.get("mitre_techniques", []))
+    return ids
+
+
 async def seed_rule_book(db: TrackerDB) -> None:
     existing = {s["alert_type"] for s in await db.list_sops()}
     for alert_type, rule in RULE_BOOK.items():
         if alert_type not in existing:
-            structured = {**rule["structured"], "common_titles": rule.get("common_titles", [])}
+            structured = {
+                **rule["structured"],
+                "common_titles": rule.get("common_titles", []),
+                "mitre_techniques": rule.get("mitre_techniques", []),
+            }
             await db.upsert_sop(alert_type, rule["steps"], category=rule["category"], structured=structured)

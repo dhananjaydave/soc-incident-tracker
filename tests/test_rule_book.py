@@ -4,7 +4,7 @@ from pathlib import Path
 import pytest
 
 from tracker.db import TrackerDB
-from tracker.rule_book import RULE_BOOK, SOP_CATEGORIES, seed_rule_book
+from tracker.rule_book import RULE_BOOK, SOP_CATEGORIES, all_mapped_mitre_technique_ids, seed_rule_book
 
 
 @pytest.fixture
@@ -56,6 +56,24 @@ async def test_seed_rule_book_includes_common_titles(db):
     await seed_rule_book(db)
     sop = await db.get_sop("Azure Risky Sign-in")
     assert "Impossible travel sign-in detected" in sop["structured"]["common_titles"]
+
+
+async def test_seed_rule_book_includes_mitre_techniques(db):
+    await seed_rule_book(db)
+    sop = await db.get_sop("Azure Risky Sign-in")
+    assert "T1078" in sop["structured"]["mitre_techniques"]
+
+
+def test_all_mapped_mitre_technique_ids_nonempty():
+    ids = all_mapped_mitre_technique_ids()
+    assert "T1110" in ids
+    assert "T1621" in ids
+    assert len(ids) > 0
+
+
+def test_every_rule_has_at_least_one_mitre_technique():
+    for alert_type, rule in RULE_BOOK.items():
+        assert rule.get("mitre_techniques"), f"{alert_type} has no MITRE technique mapping"
 
 
 async def test_seed_rule_book_does_not_overwrite_existing_customization(db):

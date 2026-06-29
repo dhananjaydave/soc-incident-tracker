@@ -19,6 +19,7 @@ from pydantic import BaseModel, Field
 
 from . import auth, integrations, telegram_bot
 from .db import TrackerDB
+from .detection_gap import compute_detection_gap
 from .investigation_score import compute_investigation_score
 from .mitre_knowledge import get_technique, list_techniques, search_techniques
 from .notifications import notify
@@ -284,8 +285,14 @@ async def get_incident(incident_id: int, _user: str = Depends(require_auth)):
     sop = await db.get_sop(incident["alert_type"])
     score = compute_investigation_score(incident, sop, updates)
     disposition_history = await db.get_disposition_history(incident["alert_type"])
+    similar_incidents = await db.get_similar_incidents(incident["alert_type"], exclude_id=incident_id)
+
+    mitre_ids = (sop["structured"].get("mitre_techniques") if sop and sop.get("structured") else None) or []
+    mitre_techniques = [{"id": tid, **t} for tid in mitre_ids if (t := get_technique(tid))]
+
     return {"incident": incident, "updates": updates, "sop": sop, "investigation_score": score,
-            "disposition_history": disposition_history}
+            "disposition_history": disposition_history, "similar_incidents": similar_incidents,
+            "mitre_techniques": mitre_techniques}
 
 
 @app.post("/api/incidents/{incident_id}/status")
@@ -356,6 +363,11 @@ async def mitre_detail(technique_id: str, _user: str = Depends(require_auth)):
     if not technique:
         raise HTTPException(status_code=404, detail="Unknown technique ID.")
     return technique
+
+
+@app.get("/api/detection-gap")
+async def detection_gap(_user: str = Depends(require_auth)):
+    return compute_detection_gap()
 
 
 @app.get("/api/feed")

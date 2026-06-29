@@ -266,6 +266,31 @@ def test_get_incident_includes_disposition_history(client):
     assert history["total"] == 1
 
 
+def test_get_incident_includes_similar_incidents(client):
+    _login(client)
+    first = client.post("/api/incidents", json={"alert_type": "Phishing", "title": "first"}).json()["incident"]
+    second = client.post("/api/incidents", json={"alert_type": "Phishing", "title": "second"}).json()["incident"]
+    resp = client.get(f"/api/incidents/{first['id']}")
+    similar_ids = [s["id"] for s in resp.json()["similar_incidents"]]
+    assert second["id"] in similar_ids
+    assert first["id"] not in similar_ids
+
+
+def test_get_incident_includes_mitre_techniques_from_rule_book(client):
+    _login(client)
+    created = client.post("/api/incidents", json={"alert_type": "Azure Risky Sign-in", "title": "test"}).json()["incident"]
+    resp = client.get(f"/api/incidents/{created['id']}")
+    techniques = resp.json()["mitre_techniques"]
+    assert any(t["id"] == "T1078" for t in techniques)
+
+
+def test_get_incident_mitre_techniques_empty_for_unmapped_alert_type(client):
+    _login(client)
+    created = client.post("/api/incidents", json={"alert_type": "Totally Custom Type", "title": "test"}).json()["incident"]
+    resp = client.get(f"/api/incidents/{created['id']}")
+    assert resp.json()["mitre_techniques"] == []
+
+
 def test_get_nonexistent_incident_404(client):
     _login(client)
     resp = client.get("/api/incidents/99999")
@@ -490,6 +515,20 @@ def test_mitre_detail_not_found(client):
     _login(client)
     resp = client.get("/api/mitre/T9999")
     assert resp.status_code == 404
+
+
+def test_detection_gap_requires_auth(client):
+    resp = client.get("/api/detection-gap")
+    assert resp.status_code == 401
+
+
+def test_detection_gap_returns_coverage_stats(client):
+    _login(client)
+    resp = client.get("/api/detection-gap")
+    body = resp.json()
+    assert "percent_covered" in body
+    assert "uncovered" in body
+    assert body["total_count"] > 0
 
 
 def test_feed_requires_auth(client):

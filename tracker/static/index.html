@@ -129,6 +129,11 @@
   .feed-card-title a { color: var(--text); text-decoration: none; font-size: 0.84rem; line-height: 1.4; }
   .feed-card-title a:hover { color: var(--accent); }
   .cve-badge { font-family: var(--mono); font-size: 0.66rem; color: var(--malicious); background: rgba(248,113,113,0.12); padding: 0.12rem 0.4rem; border-radius: 5px; margin-right: 0.3rem; display: inline-block; }
+  .mitre-tag { font-family: var(--mono); font-size: 0.7rem; color: var(--info); background: rgba(56,189,248,0.1); padding: 0.15rem 0.5rem; border-radius: 100px; margin-right: 0.3rem; margin-bottom: 0.3rem; display: inline-block; cursor: pointer; }
+  .mitre-tag:hover { background: rgba(56,189,248,0.2); }
+  .similar-incident-item { padding: 0.35rem 0; border-bottom: 1px solid var(--border); font-size: 0.83rem; cursor: pointer; }
+  .similar-incident-item:last-child { border-bottom: none; }
+  .similar-incident-item:hover { color: var(--accent); }
 
   .score-box { background: #070a12; border: 1px solid var(--border); border-radius: 9px; padding: 1rem; margin: 0.6rem 0 1rem; font-size: 0.85rem; }
   .score-bar-track { background: #050810; border-radius: 100px; height: 8px; overflow: hidden; margin-bottom: 0.8rem; }
@@ -221,7 +226,10 @@
     <div class="tab-content active" id="tab-tickets">
       <div id="list-view">
         <div class="panel">
-          <h2>Shift summary</h2>
+          <div style="display:flex; justify-content:space-between; align-items:baseline; flex-wrap:wrap; gap:0.5rem;">
+            <h2 style="margin-bottom:0;">Shift summary</h2>
+            <span id="shift-mood" style="font-size:0.8rem; color:var(--text-dim);"></span>
+          </div>
           <p class="lede" style="margin-bottom:0.8rem;">Incident counts for the last N hours - pick a shift length, or set a custom one. Click Refresh to pull the latest counts (tickets created after this loaded won't show until you do).</p>
           <div style="margin-bottom:0.8rem; display:flex; gap:0.4rem; flex-wrap:wrap; align-items:center;">
             <button class="secondary shift-preset-btn active" data-hours="8" type="button">8h shift</button>
@@ -298,6 +306,13 @@
             <label for="detail-awaiting-stakeholder" style="margin:0;">Awaiting stakeholder reply</label>
           </div>
           <div id="detail-disposition-history" style="display:none; font-size:0.85rem; color:var(--text-dim); margin:0.6rem 0;"></div>
+          <div id="detail-copilot-wrap" style="display:none;">
+            <label>Copilot</label>
+            <div class="score-box">
+              <div id="detail-mitre-tags" style="margin-bottom:0.6rem;"></div>
+              <div id="detail-similar-incidents"></div>
+            </div>
+          </div>
           <div id="detail-score-wrap" style="display:none;">
             <label>What did I forget? (closure checklist)</label>
             <div id="detail-score"></div>
@@ -324,6 +339,13 @@
     </div>
 
     <div class="tab-content" id="tab-knowledge">
+      <div class="panel">
+        <h2>Detection gap analyzer</h2>
+        <p class="lede" style="margin-bottom:0.8rem;">How many of these 55 techniques the Rule Book currently has a named rule for. Not a claim about real SIEM coverage - just where to write the next rule.</p>
+        <div class="score-bar-track"><div class="score-bar-fill" id="gap-bar-fill" style="width:0%;"></div></div>
+        <div id="gap-summary" style="font-weight:600; margin-bottom:0.6rem;"></div>
+        <div id="gap-uncovered" style="font-size:0.83rem; color:var(--text-dim);"></div>
+      </div>
       <div class="panel">
         <h2>MITRE ATT&amp;CK quick reference</h2>
         <p class="lede" style="margin-bottom:1rem;">Practical triage notes - what it looks like, common false positives, and what to do next. Click a technique for the full detail.</p>
@@ -513,7 +535,7 @@
     // fetch) must not block the others or leave the dashboard half-built
     // with no visible error.
     const results = await Promise.allSettled([
-      loadRuleBookCategories(), loadSops(), loadTickets(''), loadSummary(), loadMitreList(),
+      loadRuleBookCategories(), loadSops(), loadTickets(''), loadSummary(), loadMitreList(), loadDetectionGap(),
     ]);
     results.forEach((r, i) => { if (r.status === 'rejected') console.error('Dashboard panel', i, 'failed to load:', r.reason); });
   }
@@ -722,9 +744,18 @@
   function formatTimestamp(iso) { return new Date(iso).toLocaleString(); }
 
   // --- Shift summary ---
+  function computeShiftMood(summary) {
+    const escalated = summary.by_status.escalated || 0;
+    const total = summary.total_incidents;
+    if (escalated >= 3 || total >= 10) return '\u{1F534} Incident storm';
+    if (escalated >= 1 || total >= 4) return '\u{1F7E1} Moderate';
+    return '\u{1F7E2} Quiet';
+  }
+
   async function loadSummary() {
     const hours = parseInt(document.getElementById('summary-hours').value, 10) || 8;
     const summary = await api(`/api/summary?hours=${hours}`);
+    document.getElementById('shift-mood').textContent = computeShiftMood(summary);
     const statGrid = document.getElementById('summary-stats');
     clearChildren(statGrid);
 
@@ -859,6 +890,43 @@
       historyBox.style.display = 'none';
     }
 
+    const copilotWrap = document.getElementById('detail-copilot-wrap');
+    const mitreTechniques = data.mitre_techniques || [];
+    const similarIncidents = data.similar_incidents || [];
+    if (mitreTechniques.length || similarIncidents.length) {
+      copilotWrap.style.display = 'block';
+
+      const tagsBox = document.getElementById('detail-mitre-tags');
+      clearChildren(tagsBox);
+      for (const t of mitreTechniques) {
+        const tag = document.createElement('span');
+        tag.className = 'mitre-tag';
+        tag.textContent = `${t.id} ${t.name}`;
+        tag.addEventListener('click', () => { activateTab('knowledge'); showMitreDetail(t.id); });
+        tagsBox.appendChild(tag);
+      }
+
+      const similarBox = document.getElementById('detail-similar-incidents');
+      clearChildren(similarBox);
+      if (similarIncidents.length) {
+        const label = document.createElement('div');
+        label.style.marginBottom = '0.4rem';
+        label.style.color = 'var(--text-dim)';
+        label.style.fontSize = '0.8rem';
+        label.textContent = `Similar to ${similarIncidents.length} previous incident(s):`;
+        similarBox.appendChild(label);
+        for (const s of similarIncidents) {
+          const item = document.createElement('div');
+          item.className = 'similar-incident-item';
+          item.textContent = `#${s.id} ${s.title} - ${s.status}${s.disposition_reason ? ' (' + s.disposition_reason + ')' : ''}`;
+          item.addEventListener('click', () => showDetail(s.id));
+          similarBox.appendChild(item);
+        }
+      }
+    } else {
+      copilotWrap.style.display = 'none';
+    }
+
     const scoreWrap = document.getElementById('detail-score-wrap');
     const score = data.investigation_score;
     if (score && score.total_count > 0) {
@@ -959,6 +1027,32 @@
       card.appendChild(id); card.appendChild(name); card.appendChild(tactic);
       card.addEventListener('click', () => showMitreDetail(t.id));
       grid.appendChild(card);
+    }
+  }
+
+  async function loadDetectionGap() {
+    const gap = await api('/api/detection-gap');
+    document.getElementById('gap-bar-fill').style.width = gap.percent_covered + '%';
+    document.getElementById('gap-summary').textContent =
+      `${gap.percent_covered}% covered (${gap.covered_count}/${gap.total_count} techniques have a Rule Book entry)`;
+    const uncoveredBox = document.getElementById('gap-uncovered');
+    clearChildren(uncoveredBox);
+    if (gap.uncovered.length) {
+      const label = document.createElement('div');
+      label.style.marginBottom = '0.4rem';
+      label.textContent = 'Not yet covered by any rule:';
+      uncoveredBox.appendChild(label);
+      for (const t of gap.uncovered) {
+        const badge = document.createElement('span');
+        badge.className = 'tag-badge';
+        badge.style.marginRight = '0.3rem';
+        badge.style.marginBottom = '0.3rem';
+        badge.style.display = 'inline-block';
+        badge.style.cursor = 'pointer';
+        badge.textContent = `${t.id} ${t.name}`;
+        badge.addEventListener('click', () => showMitreDetail(t.id));
+        uncoveredBox.appendChild(badge);
+      }
     }
   }
 
