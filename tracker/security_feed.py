@@ -35,7 +35,7 @@ FEED_SOURCES: dict[str, str] = {
     "SANS Internet Storm Center": "https://isc.sans.edu/rssfeed_full.xml",
     "Dark Reading": "https://www.darkreading.com/rss.xml",
     "Schneier on Security": "https://www.schneier.com/feed/atom/",
-    "The Record": "https://therecord.media/feed/",
+    "The Record": "https://therecord.media/feed",
 }
 
 MAX_ENTRIES_PER_SOURCE = 5
