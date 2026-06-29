@@ -91,6 +91,9 @@
   .status-resolved { background: rgba(52,211,153,0.12); color: var(--clean); }
   .status-false_positive { background: rgba(124,138,163,0.15); color: var(--text-dim); }
   .tag-badge { background: rgba(56,189,248,0.12); color: var(--info); }
+  .priority-low { background: rgba(124,138,163,0.15); color: var(--text-dim); }
+  .priority-medium { background: rgba(251,191,36,0.12); color: var(--suspicious); }
+  .priority-high { background: rgba(248,113,113,0.12); color: var(--malicious); }
 
   .updates-list { list-style: none; padding: 0; margin: 0 0 1rem; }
   .updates-list li { padding: 0.5rem 0; border-bottom: 1px solid var(--border); font-size: 0.84rem; }
@@ -268,8 +271,17 @@
               <div><label>Affected user (optional)</label><input id="create-user"></div>
               <div><label>External ticket ref, e.g. ServiceNow # (optional)</label><input id="create-external-ref"></div>
             </div>
+            <div class="field-grid">
+              <div><label>Priority</label>
+                <select id="create-priority">
+                  <option value="low">Low</option>
+                  <option value="medium" selected>Medium</option>
+                  <option value="high">High</option>
+                </select>
+              </div>
+            </div>
             <label>Description (optional)</label>
-            <textarea id="create-description" style="min-height:60px;"></textarea>
+            <textarea id="create-description" style="min-height:60px;" placeholder="Pick an alert type above for a guided template"></textarea>
             <button type="submit">Create ticket</button>
           </form>
           <div id="create-disposition-history" style="display:none; font-size:0.85rem; color:var(--text-dim); margin:0.6rem 0;"></div>
@@ -314,11 +326,27 @@
           <h2 id="detail-title" style="color:var(--text); text-transform:none; font-size:1.05rem; letter-spacing:0;"></h2>
           <p id="detail-meta" style="font-size:0.83rem; color:var(--text-dim);"></p>
           <p id="detail-description"></p>
+          <div class="field-grid">
+            <div><label>Priority</label>
+              <select id="detail-priority">
+                <option value="low">Low</option>
+                <option value="medium">Medium</option>
+                <option value="high">High</option>
+              </select>
+            </div>
+            <div><label>Confidence (%) - see Detection Engineering below for guidance</label>
+              <input type="number" id="detail-confidence" min="0" max="100" placeholder="e.g. 85">
+            </div>
+          </div>
           <div class="checkbox-line">
             <input type="checkbox" id="detail-awaiting-stakeholder">
             <label for="detail-awaiting-stakeholder" style="margin:0;">Awaiting stakeholder reply</label>
           </div>
           <div id="detail-disposition-history" style="display:none; font-size:0.85rem; color:var(--text-dim); margin:0.6rem 0;"></div>
+          <div id="detail-checklist-wrap">
+            <label>Investigation checklist - what I've done on this ticket</label>
+            <div class="score-box" id="detail-checklist"></div>
+          </div>
           <div id="detail-copilot-wrap" style="display:none;">
             <label>Copilot</label>
             <div class="score-box">
@@ -359,6 +387,13 @@
               <button class="secondary" id="replay-next-btn">Next &rarr;</button>
             </div>
           </div>
+        </div>
+        <div class="panel">
+          <h2>Customer-facing description</h2>
+          <p class="lede" style="margin-bottom:0.8rem;">Generates the full 9-section write-up from this rule's templates, this ticket's data, and the checklist above - edit before sending, this is a starting draft, not a final report.</p>
+          <button class="secondary" id="generate-description-btn">Generate full description</button>
+          <textarea id="generated-description" style="display:none; min-height:320px; margin-top:0.8rem;" readonly></textarea>
+          <button class="secondary ghost" id="copy-description-btn" style="display:none;">Copy to clipboard</button>
         </div>
       </div>
     </div>
@@ -419,6 +454,14 @@
     </div>
 
     <div class="tab-content" id="tab-investigate">
+      <div class="panel">
+        <h2>How to check a suspicious IP</h2>
+        <p class="lede" style="margin-bottom:0.8rem;">General steps for any alert type - each Rule Book entry also has its own narrower guidance for what's specific to that alert.</p>
+        <div id="suspicious-ip-guide"></div>
+        <h2 style="margin-top:1.2rem;">Detection confidence reference</h2>
+        <div id="confidence-scale-table"></div>
+      </div>
+
       <div class="panel">
         <h2>IOC lookup</h2>
         <p class="lede" style="margin-bottom:1rem;">Check an IP, domain, hash, or URL against the IOC Enrichment service.</p>
@@ -571,6 +614,7 @@
     // with no visible error.
     const results = await Promise.allSettled([
       loadRuleBookCategories(), loadSops(), loadTickets(''), loadSummary(), loadMitreList(), loadDetectionGap(),
+      loadInvestigateReferences(),
     ]);
     results.forEach((r, i) => { if (r.status === 'rejected') console.error('Dashboard panel', i, 'failed to load:', r.reason); });
   }
@@ -689,10 +733,38 @@
         const p = document.createElement('p'); p.style.margin = '0'; p.textContent = s.escalation_criteria;
         container.appendChild(h4); container.appendChild(p);
       }
-      if (s.splunk_query_hint) {
+      if (s.detection_engineering && s.detection_engineering.name) {
+        const de = s.detection_engineering;
+        const h4 = document.createElement('h4'); h4.textContent = 'Detection engineering';
+        container.appendChild(h4);
+        const box = document.createElement('div'); box.className = 'splunk-box';
+        const lines = [
+          `Name: ${de.name}`, `Type: ${de.type}`,
+          `Data sources: ${(de.data_sources || []).join(', ')}`,
+          `Logic: ${de.logic}`, `Confidence guidance: ${de.confidence_guidance}`,
+        ];
+        box.textContent = lines.join('\n');
+        container.appendChild(box);
+      }
+      if (s.splunk_queries && s.splunk_queries.length) {
+        const h4 = document.createElement('h4'); h4.textContent = 'Splunk queries';
+        container.appendChild(h4);
+        for (const q of s.splunk_queries) {
+          const label = document.createElement('div');
+          label.style.fontSize = '0.78rem'; label.style.color = 'var(--text-dim)'; label.style.marginTop = '0.4rem';
+          label.textContent = q.name;
+          const box = document.createElement('div'); box.className = 'splunk-box'; box.textContent = q.query;
+          container.appendChild(label); container.appendChild(box);
+        }
+      } else if (s.splunk_query_hint) {
         const h4 = document.createElement('h4'); h4.textContent = 'Splunk query hint';
         const box = document.createElement('div'); box.className = 'splunk-box'; box.textContent = s.splunk_query_hint;
         container.appendChild(h4); container.appendChild(box);
+      }
+      if (s.ip_check_guide) {
+        const h4 = document.createElement('h4'); h4.textContent = 'How to check the IP for this alert';
+        const p = document.createElement('p'); p.style.margin = '0'; p.textContent = s.ip_check_guide;
+        container.appendChild(h4); container.appendChild(p);
       }
       appendListSection(container, 'Containment actions', s.containment_actions);
       appendListSection(container, 'Closure checklist', s.closure_checklist);
@@ -740,6 +812,18 @@
       const opt = document.createElement('option');
       opt.value = title;
       datalist.appendChild(opt);
+    }
+
+    const priorityEl = document.getElementById('create-priority');
+    if (sop && sop.structured && sop.structured.default_priority) {
+      priorityEl.value = sop.structured.default_priority;
+    }
+
+    const descEl = document.getElementById('create-description');
+    const template = sop && sop.structured && sop.structured.description_template;
+    if (template && !descEl.value.trim()) {
+      descEl.value =
+        `WHO: ${template.who}\nWHAT: ${template.what}\nWHEN: ${template.when}\nWHERE: ${template.where}\nWHY: ${template.why}`;
     }
 
     const historyBox = document.getElementById('create-disposition-history');
@@ -845,6 +929,10 @@
         tag.className = 'tag-badge'; tag.textContent = t.affected_user;
         badgeRow.appendChild(tag);
       }
+      const priorityBadge = document.createElement('span');
+      priorityBadge.className = 'status-badge priority-' + t.priority;
+      priorityBadge.textContent = t.priority;
+      badgeRow.appendChild(priorityBadge);
       const badge = document.createElement('span');
       badge.className = 'status-badge status-' + t.status;
       badge.textContent = t.status.replace('_', ' ');
@@ -875,6 +963,7 @@
           description: document.getElementById('create-description').value || null,
           affected_user: document.getElementById('create-user').value || null,
           external_ticket_ref: document.getElementById('create-external-ref').value || null,
+          priority: document.getElementById('create-priority').value,
         }),
       });
       document.getElementById('create-form').reset();
@@ -895,6 +984,8 @@
     const data = await api(`/api/incidents/${id}`);
     currentIncidentData = data;
     document.getElementById('replay-player').style.display = 'none';
+    document.getElementById('generated-description').style.display = 'none';
+    document.getElementById('copy-description-btn').style.display = 'none';
     listView.style.display = 'none';
     detailView.style.display = 'block';
 
@@ -905,6 +996,33 @@
     document.getElementById('detail-meta').textContent = metaText;
     document.getElementById('detail-description').textContent = data.incident.description || '(no description)';
     document.getElementById('detail-awaiting-stakeholder').checked = !!data.incident.awaiting_stakeholder_reply;
+    document.getElementById('detail-priority').value = data.incident.priority;
+    document.getElementById('detail-confidence').value = (data.incident.confidence_percent === null || data.incident.confidence_percent === undefined) ? '' : data.incident.confidence_percent;
+
+    const checklistBox = document.getElementById('detail-checklist');
+    clearChildren(checklistBox);
+    const checklist = data.incident.checklist || {};
+    const items = Object.keys(checklist);
+    const doneCount = items.filter(k => checklist[k]).length;
+    const summary = document.createElement('div');
+    summary.style.marginBottom = '0.6rem'; summary.style.fontWeight = '600';
+    summary.textContent = items.length ? `${Math.round((doneCount / items.length) * 100)}% complete (${doneCount}/${items.length})` : '';
+    checklistBox.appendChild(summary);
+    for (const item of items) {
+      const line = document.createElement('div'); line.className = 'checkbox-line';
+      const cb = document.createElement('input'); cb.type = 'checkbox'; cb.checked = !!checklist[item]; cb.id = 'cl-' + item.replace(/\s+/g, '-');
+      const lbl = document.createElement('label'); lbl.htmlFor = cb.id; lbl.style.margin = '0'; lbl.textContent = item;
+      cb.addEventListener('change', async () => {
+        try {
+          await api(`/api/incidents/${currentTicketId}/checklist`, {
+            method: 'POST', body: JSON.stringify({ item, checked: cb.checked }),
+          });
+          await showDetail(currentTicketId);
+        } catch (err) { showToast(err.message, true); }
+      });
+      line.appendChild(cb); line.appendChild(lbl);
+      checklistBox.appendChild(line);
+    }
 
     const sopWrap = document.getElementById('detail-sop-wrap');
     if (data.sop) {
@@ -1019,6 +1137,24 @@
     });
   });
 
+  document.getElementById('detail-priority').addEventListener('change', async (e) => {
+    try {
+      await api(`/api/incidents/${currentTicketId}/priority`, {
+        method: 'POST', body: JSON.stringify({ priority: e.target.value }),
+      });
+      await loadTickets(currentFilter);
+    } catch (err) { showToast(err.message, true); }
+  });
+
+  document.getElementById('detail-confidence').addEventListener('change', async (e) => {
+    if (e.target.value === '') return;
+    try {
+      await api(`/api/incidents/${currentTicketId}/confidence`, {
+        method: 'POST', body: JSON.stringify({ confidence_percent: parseInt(e.target.value, 10) }),
+      });
+    } catch (err) { showToast(err.message, true); }
+  });
+
   async function setStatus(status) {
     let reason = null;
     if (status !== 'open') {
@@ -1103,6 +1239,69 @@
     if (replayIndex < replayEvents.length - 1) { replayIndex += 1; renderReplayStep(); }
   });
 
+  // --- Customer-facing description generator ---
+  function generateFullDescription() {
+    const incident = currentIncidentData.incident;
+    const sop = currentIncidentData.sop;
+    const s = (sop && sop.structured) || {};
+    const sections = s.description_sections || {};
+    const de = s.detection_engineering || {};
+    const mitre = (currentIncidentData.mitre_techniques || []).map(t => `${t.id} (${t.name})`).join(', ');
+    const lines = [];
+
+    lines.push('1. EXECUTIVE SUMMARY', sections.executive_summary || '(no template for this alert type)', '');
+    lines.push('2. ALERT DESCRIPTION', s.alert_description || '(none)', '');
+    lines.push('3. DETECTION ENGINEERING');
+    if (de.name) {
+      lines.push(`Detection Name: ${de.name}`);
+      lines.push(`Detection Type: ${de.type}`);
+      lines.push(`Data Sources: ${(de.data_sources || []).join(', ')}`);
+      lines.push(`Logic: ${de.logic}`);
+      lines.push(`MITRE ATT&CK: ${mitre || 'n/a'}`);
+      lines.push(`Confidence: ${incident.confidence_percent != null ? incident.confidence_percent + '%' : '(not set)'}`);
+    } else {
+      lines.push('(none)');
+    }
+    lines.push('');
+    lines.push('4. INVESTIGATION PERFORMED', `As per ${sop ? sop.category : 'the relevant SOP'}, the following actions were performed:`);
+    for (const step of s.investigation_steps || []) lines.push(`- ${step}`);
+    lines.push('');
+    lines.push('5. FINDINGS');
+    for (const f of sections.findings || []) lines.push(`- ${f}`);
+    if (!sections.findings) lines.push('(none)');
+    lines.push('');
+    lines.push('6. IMPACT ASSESSMENT', sections.impact_assessment || '(none)', '');
+    lines.push('7. ACTIONS TAKEN');
+    for (const a of sections.actions_taken || []) lines.push(`- ${a}`);
+    if (!sections.actions_taken) lines.push('(none)');
+    lines.push('');
+    lines.push('8. RECOMMENDATIONS');
+    for (const r of sections.recommendations || []) lines.push(`- ${r}`);
+    if (!sections.recommendations) lines.push('(none)');
+    lines.push('');
+    lines.push('9. CLOSURE REASON', incident.disposition_reason || '(ticket not yet closed)');
+
+    return lines.join('\n');
+  }
+
+  document.getElementById('generate-description-btn').addEventListener('click', () => {
+    const textarea = document.getElementById('generated-description');
+    textarea.value = generateFullDescription();
+    textarea.style.display = 'block';
+    document.getElementById('copy-description-btn').style.display = 'inline-block';
+  });
+
+  document.getElementById('copy-description-btn').addEventListener('click', async () => {
+    const textarea = document.getElementById('generated-description');
+    try {
+      await navigator.clipboard.writeText(textarea.value);
+      showToast('Copied to clipboard.', false);
+    } catch (err) {
+      textarea.select();
+      showToast('Could not access clipboard - text is selected, copy manually (Ctrl+C).', true);
+    }
+  });
+
   // --- MITRE Knowledge ---
   let mitreCache = [];
   async function loadMitreList() {
@@ -1144,6 +1343,32 @@
         badge.addEventListener('click', () => showMitreDetail(t.id));
         uncoveredBox.appendChild(badge);
       }
+    }
+  }
+
+  async function loadInvestigateReferences() {
+    const guide = await api('/api/rule-book/suspicious-ip-guide');
+    const guideBox = document.getElementById('suspicious-ip-guide');
+    clearChildren(guideBox);
+    const ul = document.createElement('ul'); ul.style.margin = '0'; ul.style.paddingLeft = '1.2rem';
+    for (const step of guide.steps) {
+      const li = document.createElement('li'); li.style.marginBottom = '0.3rem'; li.style.fontSize = '0.85rem';
+      li.textContent = step;
+      ul.appendChild(li);
+    }
+    guideBox.appendChild(ul);
+
+    const scale = await api('/api/rule-book/confidence-scale');
+    const scaleBox = document.getElementById('confidence-scale-table');
+    clearChildren(scaleBox);
+    for (const band of scale) {
+      const row = document.createElement('div');
+      row.style.display = 'flex'; row.style.justifyContent = 'space-between'; row.style.padding = '0.3rem 0';
+      row.style.borderBottom = '1px solid var(--border)'; row.style.fontSize = '0.85rem';
+      const range = document.createElement('span'); range.style.fontFamily = 'var(--mono)'; range.textContent = band.range;
+      const meaning = document.createElement('span'); meaning.style.color = 'var(--text-dim)'; meaning.textContent = band.meaning;
+      row.appendChild(range); row.appendChild(meaning);
+      scaleBox.appendChild(row);
     }
   }
 

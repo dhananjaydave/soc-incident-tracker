@@ -1,7 +1,18 @@
 """The Rule Book: real, named detection rules grouped under SOP categories,
 each with the full structured guidance (investigation steps, required
-fields, Splunk query hints, containment/closure checklists) that should
-appear automatically the moment that rule is selected for a new ticket.
+fields, Splunk queries, containment/closure checklists, and a
+customer-facing description template) that should appear automatically
+the moment that rule is selected for a new ticket.
+
+The description template follows the structure the user chose after
+reviewing real SOC report formats: Executive Summary, Alert Description,
+Detection Engineering, Investigation Performed, Findings, Impact
+Assessment, Actions Taken, Recommendations, Closure Reason. Several of
+those sections map onto fields that already existed for other reasons
+(Investigation Performed = investigation_steps, Actions Taken (response)
+= containment_actions, Closure Reason = the incident's own
+disposition_reason) - only the genuinely new sections get their own
+field here, to avoid duplicating the same content twice under two names.
 
 Seeded the same way as seed_sops.py - upsert_sop() only overwrites, so
 editing a rule later (via the API) is never undone by a restart, and
@@ -19,7 +30,35 @@ SOP_CATEGORIES: list[dict[str, str]] = [
     {"id": "SOP-04", "name": "Microsoft Defender Investigation"},
     {"id": "SOP-05", "name": "CrowdStrike / Endpoint Investigation"},
     {"id": "SOP-06", "name": "Phishing / Email Investigation"},
+    {"id": "SOP-07", "name": "DDoS / Availability"},
 ]
+
+# Universal reference, not tied to one rule - how confidence percentages
+# map to a verdict, for whichever rule's description includes one.
+CONFIDENCE_SCALE: list[dict[str, str]] = [
+    {"range": "90-100%", "meaning": "Highly malicious"},
+    {"range": "70-89%", "meaning": "Likely suspicious"},
+    {"range": "50-69%", "meaning": "Requires investigation"},
+    {"range": "Below 50%", "meaning": "Possible false positive"},
+]
+
+# A cross-cutting reference for assessing ANY IP encountered during
+# triage, regardless of which rule fired - the worked "Suspicious IP"
+# example the user gave, generalized. Alert-specific rules below also
+# have their own narrower ip_check_guide for what's specifically
+# relevant to THAT alert type.
+SUSPICIOUS_IP_GUIDE: dict = {
+    "title": "How to check a suspicious IP (any alert type)",
+    "steps": [
+        "Look it up in the Investigate tab's IOC lookup - this pulls AbuseIPDB's abuse score and report count, plus VirusTotal's detection ratio, in one call.",
+        "Check ASN and geolocation - does it belong to a hosting/VPS provider (common for attack infrastructure) or a residential/business ISP consistent with where your real users connect from?",
+        "Search your own logs for the IP's history - has it ever been associated with a legitimate session for this org? First-seen-today + high abuse score is a strong combined signal.",
+        "Check whether the same IP appears against other unrelated alerts/accounts - recurrence across multiple unrelated targets points to scanning/attack infrastructure rather than a one-off.",
+        "Cross-reference any threat intel your org subscribes to, if available, for a known campaign/actor match.",
+    ],
+    "findings_example": "The IP has been associated with suspicious activity (elevated AbuseIPDB score, no history of legitimate access from this organization).",
+    "recommendation_example": "Block the IP at the relevant control point and continue monitoring for recurrence.",
+}
 
 RULE_BOOK: dict[str, dict] = {
     "GP-VPN Brute Force Attempts": {
@@ -30,6 +69,14 @@ RULE_BOOK: dict[str, dict] = {
             "Failed VPN authentication spike",
         ],
         "mitre_techniques": ["T1110", "T1133"],
+        "default_priority": "medium",
+        "description_template": {
+            "who": "Targeted account(s) - list every username attempted, not just one",
+            "what": "Number of failed attempts and whether any attempt succeeded",
+            "when": "Start/end time of the attempt window",
+            "where": "Source IP/ASN and which VPN gateway/site was targeted",
+            "why": "Verdict - e.g. 'No successful auth, source IP blocked, closed as contained' or 'Successful auth on attempt N - escalated as confirmed compromise'",
+        },
         "description": (
             "Repeated failed VPN logins against one or more accounts from the same source. "
             "Business impact: a successful brute force gives an external actor a foothold "
@@ -43,6 +90,43 @@ RULE_BOOK: dict[str, dict] = {
             "5. Block the source IP/range at the VPN gateway if volume or reputation warrants it.\n"
             "6. Document attempt count, time window, and accounts targeted in the ticket."
         ),
+        "detection_engineering": {
+            "name": "VPN Brute Force",
+            "type": "Threshold / Correlation Rule",
+            "data_sources": ["VPN logs", "Identity provider logs"],
+            "logic": "10+ failed authentications against the same account(s) from one source IP within a short window.",
+            "confidence_guidance": "High account-attempt-count + zero successes from a low-reputation IP = high confidence true positive. A single account with one or two failures is usually just a mistyped password.",
+        },
+        "splunk_queries": [
+            {"name": "Find the brute-force pattern", "query": "index=vpn action=failure | stats count by src_ip, user | where count > 10"},
+            {"name": "Check if any attempt succeeded", "query": "index=vpn src_ip=<ip> | stats count by action"},
+            {"name": "Check a specific user's login history", "query": "index=vpn user=<username> | sort -_time | table _time, action, src_ip"},
+        ],
+        "ip_check_guide": (
+            "Pull the source IP's reputation via the Investigate tab (AbuseIPDB score, VirusTotal detections, ASN). "
+            "A hosting/VPS-range IP with no prior legitimate session history for this org and a non-trivial abuse "
+            "score is confidently the attacker; a known corporate VPN exit node or partner IP is very likely benign."
+        ),
+        "description_sections": {
+            "executive_summary": "The SOC detected multiple failed VPN authentication attempts originating from an external IP address targeting one or more user accounts. The activity was investigated to determine whether unauthorized access occurred.",
+            "findings": [
+                "No successful authentication was identified.",
+                "The source IP showed no history of legitimate access from this organization.",
+                "No additional indicators of compromise were identified.",
+            ],
+            "impact_assessment": "At the time of investigation, no evidence of account compromise or unauthorized access was identified.",
+            "actions_taken": [
+                "Reviewed VPN authentication logs for the targeted account(s).",
+                "Validated whether any attempt succeeded.",
+                "Checked the source IP's reputation and history.",
+                "Reviewed related alerts for the same source IP.",
+            ],
+            "recommendations": [
+                "Continue monitoring the source IP.",
+                "Block the IP at the VPN gateway if further activity is observed.",
+                "Consider enabling additional MFA controls for the targeted account(s).",
+            ],
+        },
         "structured": {
             "investigation_steps": [
                 "Pull the full list of attempted usernames and the source IP/ASN.",
@@ -79,6 +163,14 @@ RULE_BOOK: dict[str, dict] = {
             "Spray attack against multiple users from one source",
         ],
         "mitre_techniques": ["T1110"],
+        "default_priority": "medium",
+        "description_template": {
+            "who": "All targeted accounts - the spray's BREADTH (account count) is the key fact, not any single account",
+            "what": "Number of accounts targeted and the passwords/pattern observed, if known",
+            "when": "Start/end time of the spray window",
+            "where": "Source IP/ASN and geography",
+            "why": "Verdict - e.g. 'No successful logins across N accounts, source blocked' or 'Hit confirmed on <user> - escalated, org-wide reset recommended'",
+        },
         "description": (
             "Low-and-slow login attempts against MANY accounts using a small set of common "
             "passwords, designed to stay under per-account lockout thresholds. Business "
@@ -92,6 +184,43 @@ RULE_BOOK: dict[str, dict] = {
             "5. Recommend org-wide password reset only if a hit is confirmed or the spray is unusually broad.\n"
             "6. Document scope (number of accounts targeted) - this is the key severity signal for spraying, not per-account attempt count."
         ),
+        "detection_engineering": {
+            "name": "VPN/Identity Password Spraying",
+            "type": "Correlation Rule",
+            "data_sources": ["VPN logs", "Active Directory", "Identity provider logs"],
+            "logic": "5+ failed logins across 3+ different user accounts from the same source IP within a 10-minute window.",
+            "confidence_guidance": "85% typical confidence when the account-diversity and IP-singularity conditions both hold cleanly with no successful login mixed in.",
+        },
+        "splunk_queries": [
+            {"name": "Find the spray pattern", "query": "index=auth action=failure | stats dc(user) as accounts_targeted by src_ip | where accounts_targeted > 3"},
+            {"name": "Check if any login succeeded", "query": "index=auth src_ip=<ip> | stats count by action, user"},
+            {"name": "Check a specific user's login history", "query": "index=auth user=<username> | sort -_time | table _time, action, src_ip"},
+        ],
+        "ip_check_guide": (
+            "Same approach as brute force, but cross-check the IP against OTHER tenants/customers if your "
+            "platform serves multiple - commodity spray tools reuse the same source against many targets in sequence."
+        ),
+        "description_sections": {
+            "executive_summary": "The SOC detected repeated authentication attempts against multiple accounts from a single source IP address, consistent with a password spraying attack. The activity was investigated to determine whether unauthorized access occurred.",
+            "findings": [
+                "No successful authentication was identified.",
+                "The user account(s) remained uncompromised.",
+                "The source IP appears suspicious based on its targeting pattern.",
+            ],
+            "impact_assessment": "At the time of investigation, no evidence of account compromise or unauthorized access was identified.",
+            "actions_taken": [
+                "Reviewed authentication logs across the targeted accounts.",
+                "Validated whether any login attempt succeeded.",
+                "Investigated the source IP's reputation.",
+                "Reviewed related alerts for the same source.",
+            ],
+            "recommendations": [
+                "Continue monitoring.",
+                "Reset credentials if a hit is later confirmed.",
+                "Block the source IP if confirmed malicious.",
+                "Enable additional MFA controls.",
+            ],
+        },
         "structured": {
             "investigation_steps": [
                 "Confirm the pattern is many-accounts/few-passwords - distinguishes spraying from simple brute force.",
@@ -128,6 +257,14 @@ RULE_BOOK: dict[str, dict] = {
             "Unfamiliar sign-in properties flagged",
         ],
         "mitre_techniques": ["T1078", "T1114"],
+        "default_priority": "high",
+        "description_template": {
+            "who": "The account that triggered the risk detection",
+            "what": "The specific risk detection type(s) Entra ID flagged (impossible travel, anonymous IP, leaked credentials, etc.)",
+            "when": "Sign-in timestamp",
+            "where": "Source IP/location/device vs the user's normal pattern",
+            "why": "Verdict - e.g. 'User confirmed travel, false positive' or 'User denies sign-in, mailbox rule found - confirmed compromise, sessions revoked'",
+        },
         "description": (
             "Azure AD/Entra ID flagged a sign-in as risky (impossible travel, anonymous IP, "
             "unfamiliar sign-in properties, leaked credentials, etc). Business impact: this is "
@@ -141,6 +278,43 @@ RULE_BOOK: dict[str, dict] = {
             "5. Revoke all active sessions and require re-authentication with MFA if compromise is plausible.\n"
             "6. Confirm with the user via a channel OTHER than email (Teams/phone) since email itself may be compromised."
         ),
+        "detection_engineering": {
+            "name": "Entra ID Risky Sign-in",
+            "type": "ML / Anomaly Detection (Microsoft-native)",
+            "data_sources": ["Entra ID sign-in logs", "Identity Protection risk detections"],
+            "logic": "Microsoft's own risk engine - impossible travel, anonymous IP/Tor, unfamiliar sign-in properties, or a credential found in a leak corpus.",
+            "confidence_guidance": "Treat Microsoft's own risk LEVEL (low/medium/high) as a starting confidence, then adjust down if the user confirms legitimate travel/VPN use.",
+        },
+        "splunk_queries": [
+            {"name": "Cross-check mailbox access after sign-in", "query": "index=o365 eventtype=mailitemsaccessed user=<user> earliest=<signin_time>"},
+            {"name": "Check for new inbox/forwarding rules", "query": "index=o365 Operation=\"New-InboxRule\" OR Operation=\"Set-Mailbox\" user=<user>"},
+            {"name": "Check the user's recent sign-in history", "query": "index=o365 eventtype=signin user=<user> | sort -_time | table _time, src_ip, location, risk_level"},
+        ],
+        "ip_check_guide": (
+            "Check the sign-in IP's reputation and geolocation via the Investigate tab. Compare against the "
+            "user's normal egress (corporate VPN/proxy ranges) - a known corporate exit node flagged as "
+            "'anonymous' is a common benign cause; an unfamiliar residential/hosting IP in a country the user has never traveled to is not."
+        ),
+        "description_sections": {
+            "executive_summary": "The SOC detected a sign-in flagged as risky by the identity provider's risk engine, potentially indicating account compromise. The activity was investigated to determine whether the account was accessed by an unauthorized party.",
+            "findings": [
+                "The specific risk detection type was reviewed.",
+                "No unauthorized mailbox rules or OAuth grants were identified.",
+                "The user's response to the sign-in was recorded.",
+            ],
+            "impact_assessment": "At the time of investigation, no evidence of unauthorized access or data exposure was identified.",
+            "actions_taken": [
+                "Reviewed the specific risk detection type.",
+                "Compared sign-in location/device against the user's normal pattern.",
+                "Reviewed post-sign-in mailbox and application activity.",
+                "Contacted the user via a separate channel to confirm the sign-in.",
+            ],
+            "recommendations": [
+                "Continue monitoring the account.",
+                "Reset credentials and re-register MFA if compromise is confirmed.",
+                "Educate the user on recognizing risky sign-in prompts.",
+            ],
+        },
         "structured": {
             "investigation_steps": [
                 "Read the specific Entra ID risk detection type(s) (impossible travel, anonymous IP, leaked credentials, etc).",
@@ -177,6 +351,14 @@ RULE_BOOK: dict[str, dict] = {
             "Repeated MFA push notifications to user",
         ],
         "mitre_techniques": ["T1621", "T1111"],
+        "default_priority": "high",
+        "description_template": {
+            "who": "The user receiving the push prompts",
+            "what": "Number of push prompts and whether the user approved any of them",
+            "when": "Start/end time of the prompt burst",
+            "where": "Source IP/device generating the requests, if identifiable",
+            "why": "Verdict - e.g. 'User denied all prompts, password reset as precaution' or 'User approved a prompt - confirmed compromise, account reset and re-registered'",
+        },
         "description": (
             "A user is receiving an unusual volume of MFA push prompts they did not initiate "
             "('MFA fatigue' / 'MFA bombing'). Business impact: the attacker already has valid "
@@ -190,6 +372,42 @@ RULE_BOOK: dict[str, dict] = {
             "5. Reset the password regardless of approval status - the credential is known to be compromised.\n"
             "6. Educate the user on MFA fatigue attacks as part of closure, not just resetting and moving on."
         ),
+        "detection_engineering": {
+            "name": "MFA Push Fatigue / Bombing",
+            "type": "Threshold Detection",
+            "data_sources": ["PingID logs", "Identity provider authentication logs"],
+            "logic": "5+ MFA push notifications to the same user within a short window without a corresponding single legitimate login attempt.",
+            "confidence_guidance": "Confidence rises sharply with prompt count and falls if multiple legitimate devices/sessions explain the volume (check device count first).",
+        },
+        "splunk_queries": [
+            {"name": "Find the push-spam pattern", "query": "index=pingid eventtype=push | stats count by user | where count > 5"},
+            {"name": "Check the originating credential-entry event", "query": "index=auth user=<user> earliest=-1h | sort -_time"},
+            {"name": "Check if the same source IP hit other accounts", "query": "index=pingid src_ip=<ip> | stats dc(user) by src_ip"},
+        ],
+        "ip_check_guide": (
+            "Check the source IP generating the pushes via the Investigate tab. If it also appears against other "
+            "accounts in the same window, this is part of a wider credential-stuffing campaign, not an isolated incident."
+        ),
+        "description_sections": {
+            "executive_summary": "The SOC detected an unusual volume of MFA push notifications sent to a user who did not initiate them, consistent with an MFA fatigue attack. The activity was investigated to determine whether the user approved any prompt.",
+            "findings": [
+                "The user's response to each prompt was confirmed.",
+                "The source generating the requests was identified where possible.",
+                "Password reset was performed regardless of outcome, since the underlying credential is known to be compromised.",
+            ],
+            "impact_assessment": "Impact depends entirely on approval status - no compromise if all prompts were denied; confirmed compromise if any prompt was approved.",
+            "actions_taken": [
+                "Contacted the user to confirm approval/denial status.",
+                "Identified the source IP/device generating the requests.",
+                "Reviewed authentication logs for the originating credential-entry event.",
+                "Reset the account password as a precaution.",
+            ],
+            "recommendations": [
+                "Brief the user on MFA fatigue tactics.",
+                "Continue monitoring the account.",
+                "Consider number-matching or risk-based MFA policies to reduce future fatigue-attack surface.",
+            ],
+        },
         "structured": {
             "investigation_steps": [
                 "Confirm with the user directly whether they approved any push prompt.",
@@ -224,6 +442,14 @@ RULE_BOOK: dict[str, dict] = {
             "Potential malware execution detected",
         ],
         "mitre_techniques": ["T1055", "T1059", "T1027"],
+        "default_priority": "high",
+        "description_template": {
+            "who": "Affected host(s) - and the logged-in user(s) on those hosts at the time",
+            "what": "The detected process/technique and whether Falcon auto-blocked it",
+            "when": "Detection timestamp",
+            "where": "Hostname(s) - and whether the same hash/indicator was found on others",
+            "why": "Verdict - e.g. 'Known approved tool, false positive' or 'Confirmed malicious, host isolated, scope limited to one host'",
+        },
         "description": (
             "CrowdStrike Falcon flagged a high-severity detection on an endpoint (process "
             "injection, credential access, ransomware behavior, etc). Business impact varies "
@@ -237,6 +463,42 @@ RULE_BOOK: dict[str, dict] = {
             "5. Network-contain the host in Falcon if the process is still active and not yet blocked.\n"
             "6. Check for the same hash/indicator on other hosts via Falcon's fleet-wide search before closing."
         ),
+        "detection_engineering": {
+            "name": "Falcon High-Severity Endpoint Detection",
+            "type": "Behavioral / ML Detection (CrowdStrike-native)",
+            "data_sources": ["CrowdStrike Falcon sensor telemetry", "Process execution logs"],
+            "logic": "Falcon's own behavioral/ML model flags the process tree and technique; severity and MITRE mapping are provided directly by the platform.",
+            "confidence_guidance": "Trust Falcon's own severity score as the starting point; lower confidence only if the binary matches a known, approved internal tool.",
+        },
+        "splunk_queries": [
+            {"name": "Pull the full detection event", "query": "index=crowdstrike event_simpleName=ProcessRollup2 OR event_simpleName=*Detect* ComputerName=<host>"},
+            {"name": "Check for the same hash fleet-wide", "query": "index=crowdstrike SHA256HashData=<hash> | stats dc(ComputerName) by SHA256HashData"},
+            {"name": "Check the host's recent process history", "query": "index=crowdstrike ComputerName=<host> | sort -_time | table _time, FileName, CommandLine, ParentBaseFileName"},
+        ],
+        "ip_check_guide": (
+            "If the detection involves a network connection (C2 beacon, download), check that destination IP/domain "
+            "via the Investigate tab the same way as any other alert - reputation, ASN, and whether other hosts have called out to it."
+        ),
+        "description_sections": {
+            "executive_summary": "The SOC detected a high-severity endpoint alert from CrowdStrike Falcon involving a flagged process on a host. The activity was investigated to determine whether the host was compromised.",
+            "findings": [
+                "The full process tree and command line were reviewed.",
+                "Falcon's auto-remediation status was confirmed.",
+                "Scope was checked across the fleet for the same indicator.",
+            ],
+            "impact_assessment": "Impact depends on whether the process executed successfully and whether it spread beyond the originating host.",
+            "actions_taken": [
+                "Reviewed the detection's process tree and command line in the Falcon console.",
+                "Confirmed whether Falcon auto-blocked the process.",
+                "Checked the binary's signature/reputation.",
+                "Searched fleet-wide for the same hash/indicator.",
+            ],
+            "recommendations": [
+                "Continue monitoring the host.",
+                "Isolate and image the host if ransomware/lateral-movement behavior is confirmed.",
+                "Add the indicator to the blocklist if confirmed malicious.",
+            ],
+        },
         "structured": {
             "investigation_steps": [
                 "Open the detection in Falcon, review the full process tree and command line.",
@@ -273,6 +535,14 @@ RULE_BOOK: dict[str, dict] = {
             "Defender for O365 high alert",
         ],
         "mitre_techniques": ["T1059", "T1078", "T1566"],
+        "default_priority": "high",
+        "description_template": {
+            "who": "Affected user/device",
+            "what": "Which Defender product raised it and the alert category/technique",
+            "when": "Alert timestamp",
+            "where": "Device/identity involved, and whether it correlates with other recent alerts",
+            "why": "Verdict - e.g. 'Automated remediation succeeded, no further action' or 'Remediation failed, manually contained, escalated'",
+        },
         "description": (
             "Microsoft Defender (for Endpoint/Office 365/Identity) raised a high-severity "
             "alert. Business impact depends on the Defender product and technique involved - "
@@ -286,6 +556,42 @@ RULE_BOOK: dict[str, dict] = {
             "5. Take manual remediation action only for what Defender's automation did NOT already handle.\n"
             "6. Cross-check any file/IP/domain involved against the IOC enrichment tool before treating as confirmed-bad."
         ),
+        "detection_engineering": {
+            "name": "Defender High-Severity Alert",
+            "type": "Behavioral / ML Detection (Microsoft-native)",
+            "data_sources": ["Microsoft Defender for Endpoint", "Defender for O365", "Defender for Identity"],
+            "logic": "Defender's own incident-graph correlation across entities (device, user, file, mailbox) - severity and category are platform-assigned.",
+            "confidence_guidance": "If Defender's automated investigation already classified it as a threat with high confidence, treat that as your starting point; downgrade only with a specific contrary finding.",
+        },
+        "splunk_queries": [
+            {"name": "Pull the device/user's alert history", "query": "index=defender_atp | search DeviceName=<host> OR AccountName=<user> | sort -_time"},
+            {"name": "Check automated remediation status", "query": "index=defender_atp ActionType=*Remediat* DeviceName=<host>"},
+            {"name": "Check related alerts in the same incident graph", "query": "index=defender_atp IncidentId=<id> | table _time, AlertTitle, Severity, EntityType"},
+        ],
+        "ip_check_guide": (
+            "If the alert involves a network indicator, check it the same way as any other alert via the Investigate "
+            "tab - Defender's own threat intel context plus the IOC lookup together usually settle the verdict quickly."
+        ),
+        "description_sections": {
+            "executive_summary": "The SOC detected a high-severity alert from Microsoft Defender involving a flagged device, user, or mailbox. The activity was investigated to determine its scope and impact.",
+            "findings": [
+                "The Defender incident graph and timeline were reviewed.",
+                "Automated remediation status was confirmed.",
+                "Related alerts on the same entity were reviewed.",
+            ],
+            "impact_assessment": "Impact depends on whether Defender's automated remediation succeeded and whether the entity correlates with other active alerts.",
+            "actions_taken": [
+                "Reviewed the Defender incident graph and timeline.",
+                "Identified which Defender product raised the alert.",
+                "Confirmed automated remediation status.",
+                "Cross-checked any file/IP/domain via IOC enrichment.",
+            ],
+            "recommendations": [
+                "Continue monitoring the entity.",
+                "Manually contain if automated remediation did not fully resolve it.",
+                "Review for related alerts on the same user/device going forward.",
+            ],
+        },
         "structured": {
             "investigation_steps": [
                 "Open the alert in the Defender portal, review the full incident graph and timeline.",
@@ -322,6 +628,14 @@ RULE_BOOK: dict[str, dict] = {
             "Bulk phishing campaign detected in O365",
         ],
         "mitre_techniques": ["T1566", "T1204"],
+        "default_priority": "medium",
+        "description_template": {
+            "who": "Recipient(s) - check Threat Explorer for the FULL campaign, rarely just one person",
+            "what": "Sender domain, subject, and whether a link was clicked or credentials entered",
+            "when": "Delivery timestamp",
+            "where": "Number of recipients across the org",
+            "why": "Verdict - e.g. 'No clicks, message purged org-wide' or 'Credentials entered - confirmed compromise, reset + MFA re-registration done'",
+        },
         "description": (
             "A phishing email was reported or auto-flagged in Office 365 (via user report, "
             "Defender for O365, or mail flow rules). Business impact depends entirely on "
@@ -335,6 +649,42 @@ RULE_BOOK: dict[str, dict] = {
             "5. Purge the message from all mailboxes it reached, not just the reporting user's.\n"
             "6. Block the sender domain/URL at the mail gateway and proxy, and notify all affected users in plain language."
         ),
+        "detection_engineering": {
+            "name": "O365 Phishing Detection",
+            "type": "Signature / Heuristic Detection",
+            "data_sources": ["Microsoft 365 mail flow logs", "Defender for O365 (Safe Links/Safe Attachments)", "User reports"],
+            "logic": "Sender authentication failure (SPF/DKIM/DMARC), known phishing-kit URL/attachment signature, or a user report matched against Threat Explorer's campaign clustering.",
+            "confidence_guidance": "A failed sender-authentication check plus a credential-harvesting page signature together push confidence well above 90%; a user report alone with clean authentication is often a false positive.",
+        },
+        "splunk_queries": [
+            {"name": "Find the full campaign by subject/sender", "query": "index=o365 eventtype=email | search subject=\"<subject>\" OR sender=\"<sender>\""},
+            {"name": "Check a specific recipient's click activity", "query": "index=o365 eventtype=url_click user=<user> earliest=<delivery_time>"},
+            {"name": "Check sender authentication results", "query": "index=o365 eventtype=email sender=\"<sender>\" | table _time, spf_result, dkim_result, dmarc_result"},
+        ],
+        "ip_check_guide": (
+            "Check the sending IP and any embedded link's hosting IP via the Investigate tab. A sending IP with no "
+            "prior mail history for this org plus a low-reputation/newly-registered hosting IP for the link strongly supports a true positive."
+        ),
+        "description_sections": {
+            "executive_summary": "The SOC detected a phishing email reported by a user or flagged by automated detection, potentially exposing the organization to credential theft. The activity was investigated to determine its reach and impact.",
+            "findings": [
+                "The full recipient list for the campaign was identified.",
+                "Sender authentication (SPF/DKIM/DMARC) results were reviewed.",
+                "Click/credential-entry status was confirmed across all recipients.",
+            ],
+            "impact_assessment": "Impact depends entirely on whether any recipient entered credentials - no compromise if none did; confirmed compromise otherwise.",
+            "actions_taken": [
+                "Reviewed message headers and sender authentication results.",
+                "Extracted and enriched all IOCs (sender domain, links, attachments).",
+                "Used Threat Explorer to identify the full recipient list.",
+                "Purged the message from all reached mailboxes.",
+            ],
+            "recommendations": [
+                "Block the sender domain/URL at the gateway.",
+                "Notify all affected users in plain language.",
+                "Reset credentials for anyone who entered them.",
+            ],
+        },
         "structured": {
             "investigation_steps": [
                 "Pull message headers, check SPF/DKIM/DMARC results for sender spoofing.",
@@ -364,6 +714,100 @@ RULE_BOOK: dict[str, dict] = {
             ],
         },
     },
+    "DDoS Attack Detected": {
+        "category": "SOP-07: DDoS / Availability",
+        "common_titles": [
+            "Volumetric DDoS attack detected",
+            "Service degradation due to traffic spike",
+            "Application-layer DDoS against web service",
+        ],
+        "mitre_techniques": ["T1499"],
+        "default_priority": "high",
+        "description_template": {
+            "who": "Affected service(s)/system(s) - this alert type targets infrastructure, not a user account",
+            "what": "Attack type (volumetric/protocol/application-layer) and peak traffic volume observed",
+            "when": "Start time and duration of the attack",
+            "where": "Target IP/service, plus top source IP/ASN/country distribution",
+            "why": "Verdict - e.g. 'Confirmed legitimate traffic spike, no action needed' or 'Confirmed attack, mitigated via rate limiting, service availability restored'",
+        },
+        "description": (
+            "An attacker (or botnet) is overwhelming a service or network with traffic to make "
+            "it unavailable to legitimate users. Business impact: direct service outage/degradation, "
+            "and a common smokescreen for a simultaneous, less-noisy attack elsewhere."
+        ),
+        "steps": (
+            "1. Confirm the attack is real - check whether the volume correlates with a known legitimate event (product launch, marketing campaign, viral content) before treating as malicious.\n"
+            "2. Identify the attack type: volumetric (raw bandwidth), protocol (e.g. SYN flood), or application-layer (e.g. HTTP flood).\n"
+            "3. Check which services are actually degraded vs still healthy - scope matters for response urgency.\n"
+            "4. Identify the top source IPs/ASNs/countries by volume - these are your mitigation targets.\n"
+            "5. Apply mitigation appropriate to the attack type: rate limiting, ACLs, geo-fencing, malicious user-agent blocking, or engaging a CDN/scrubbing provider/ISP for large volumetric attacks.\n"
+            "6. Document peak volume, duration, and mitigation effectiveness for the write-up."
+        ),
+        "detection_engineering": {
+            "name": "DDoS / Volumetric Traffic Anomaly",
+            "type": "Threshold / Anomaly Detection",
+            "data_sources": ["Firewall/edge logs", "CDN/WAF logs", "NetFlow/traffic baseline"],
+            "logic": "Traffic volume or connection rate to a service exceeds its established baseline by a large multiple, sustained beyond a short threshold window.",
+            "confidence_guidance": "High confidence when volume is both abnormal AND has no corresponding legitimate business event; check the business calendar before escalating on volume alone.",
+        },
+        "splunk_queries": [
+            {"name": "Find top source IPs by volume", "query": "index=network dest=<service_ip> | stats sum(bytes) as total_bytes by src_ip | sort -total_bytes | head 20"},
+            {"name": "Check traffic by source country/ASN", "query": "index=network dest=<service_ip> | iplocation src_ip | stats count by Country, src_ip"},
+            {"name": "Check service availability during the window", "query": "index=web_logs dest=<service_ip> | timechart span=1m count by status"},
+        ],
+        "ip_check_guide": (
+            "For each top-volume source IP, check reputation/ASN via the Investigate tab. A spread across many "
+            "unrelated hosting-provider IPs with no legitimate history is classic botnet traffic; a concentrated "
+            "spike from a small number of IPs with real history may be a misbehaving legitimate client instead."
+        ),
+        "description_sections": {
+            "executive_summary": "The SOC detected an unusually high volume of traffic directed toward a public-facing service, potentially indicating denial-of-service activity. The activity was investigated to determine impact and whether mitigation was required.",
+            "findings": [
+                "No service outage was identified.",
+                "Traffic originated from a wide distribution of source IPs consistent with a botnet.",
+                "No legitimate business event explained the volume.",
+            ],
+            "impact_assessment": "Service remained available throughout the event; degradation, if any, was limited to elevated latency.",
+            "actions_taken": [
+                "Reviewed firewall/edge logs for the affected service.",
+                "Identified top source IPs by traffic volume.",
+                "Validated service availability throughout the window.",
+                "Reviewed bandwidth utilization against baseline.",
+            ],
+            "recommendations": [
+                "Continue monitoring.",
+                "Consider rate limiting or geo-fencing for the top offending sources.",
+                "Engage the CDN/scrubbing provider if volume exceeds on-prem mitigation capacity.",
+            ],
+        },
+        "structured": {
+            "investigation_steps": [
+                "Confirm the attack is real - rule out a legitimate traffic spike (check the business calendar) first.",
+                "Identify attack type: volumetric, protocol, or application-layer.",
+                "Check which services are actually degraded vs still healthy.",
+                "Identify top source IPs/ASNs/countries by volume.",
+                "Check whether mitigation already engaged (CDN/WAF auto-mitigation) and its effectiveness.",
+            ],
+            "required_fields": ["Affected service/IP", "Attack type", "Peak traffic volume", "Source IP/ASN/country distribution", "Duration"],
+            "escalation_criteria": "Any customer-facing service outage, OR the attack is sustained beyond 30 minutes without mitigation effect, OR volume exceeds normal baseline by 10x or more.",
+            "splunk_query_hint": "index=network dest=<service_ip> | stats sum(bytes) as total_bytes by src_ip | sort -total_bytes | head 20",
+            "containment_actions": [
+                "Enable or tighten rate limiting at the edge/WAF.",
+                "Apply geo-fencing or ASN-based ACLs for the worst offending sources.",
+                "Block malicious user-agents if the attack is application-layer.",
+                "Engage the CDN/scrubbing provider or ISP if volumetric and beyond on-prem capacity.",
+            ],
+            "closure_checklist": [
+                "Attack type and peak volume documented.",
+                "Mitigation action confirmed effective.",
+                "Affected service availability restored and verified.",
+                "Disposition reason recorded.",
+            ],
+            "false_positive_indicators": [
+                "Legitimate traffic spike from a marketing campaign, viral content, or a scheduled batch job - check the business calendar before treating as an attack.",
+            ],
+        },
+    },
 }
 
 
@@ -385,5 +829,12 @@ async def seed_rule_book(db: TrackerDB) -> None:
                 **rule["structured"],
                 "common_titles": rule.get("common_titles", []),
                 "mitre_techniques": rule.get("mitre_techniques", []),
+                "default_priority": rule.get("default_priority", "medium"),
+                "description_template": rule.get("description_template", {}),
+                "detection_engineering": rule.get("detection_engineering", {}),
+                "splunk_queries": rule.get("splunk_queries", []),
+                "ip_check_guide": rule.get("ip_check_guide", ""),
+                "description_sections": rule.get("description_sections", {}),
+                "alert_description": rule.get("description", ""),
             }
             await db.upsert_sop(alert_type, rule["steps"], category=rule["category"], structured=structured)

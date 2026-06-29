@@ -14,6 +14,15 @@ from datetime import datetime, timedelta, timezone
 DEFAULT_DB_PATH = os.environ.get("TRACKER_DB_PATH", "tracker.db")
 
 VALID_STATUSES = ("open", "escalated", "resolved", "false_positive")
+VALID_PRIORITIES = ("low", "medium", "high")
+
+# The analyst's own self-reported checklist - explicitly ticked per
+# incident, distinct from investigation_score.py's heuristic estimate
+# (which infers status from existing data rather than asking).
+CHECKLIST_ITEMS = (
+    "User verified", "Logs reviewed", "Related alerts checked",
+    "Evidence collected", "SOP followed", "Recommendations provided",
+)
 
 
 def _connect(db_path: str) -> sqlite3.Connection:
@@ -40,6 +49,12 @@ def _connect(db_path: str) -> sqlite3.Connection:
         conn.execute("ALTER TABLE incidents ADD COLUMN awaiting_stakeholder_reply INTEGER NOT NULL DEFAULT 0")
     if "affected_user" not in existing_incident_columns:
         conn.execute("ALTER TABLE incidents ADD COLUMN affected_user TEXT")
+    if "priority" not in existing_incident_columns:
+        conn.execute("ALTER TABLE incidents ADD COLUMN priority TEXT NOT NULL DEFAULT 'medium'")
+    if "checklist_json" not in existing_incident_columns:
+        conn.execute("ALTER TABLE incidents ADD COLUMN checklist_json TEXT")
+    if "confidence_percent" not in existing_incident_columns:
+        conn.execute("ALTER TABLE incidents ADD COLUMN confidence_percent INTEGER")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_incidents_affected_user ON incidents(affected_user)")
     conn.execute(
         """
@@ -82,18 +97,23 @@ def _connect(db_path: str) -> sqlite3.Connection:
 
 
 def _row_to_incident(row: sqlite3.Row) -> dict:
-    return dict(row)
+    import json
+    incident = dict(row)
+    raw = incident.pop("checklist_json", None)
+    saved = json.loads(raw) if raw else {}
+    incident["checklist"] = {item: saved.get(item, False) for item in CHECKLIST_ITEMS}
+    return incident
 
 
 def _create_incident_sync(db_path: str, alert_type: str, title: str, description: str | None,
-                           external_ticket_ref: str | None, affected_user: str | None) -> dict:
+                           external_ticket_ref: str | None, affected_user: str | None, priority: str) -> dict:
     conn = _connect(db_path)
     try:
         now = datetime.now(timezone.utc).isoformat()
         cursor = conn.execute(
             "INSERT INTO incidents (alert_type, title, description, status, created_at, updated_at, "
-            "external_ticket_ref, affected_user) VALUES (?, ?, ?, 'open', ?, ?, ?, ?)",
-            (alert_type, title, description, now, now, external_ticket_ref, affected_user),
+            "external_ticket_ref, affected_user, priority) VALUES (?, ?, ?, 'open', ?, ?, ?, ?, ?)",
+            (alert_type, title, description, now, now, external_ticket_ref, affected_user, priority),
         )
         conn.commit()
         row = conn.execute("SELECT * FROM incidents WHERE id = ?", (cursor.lastrowid,)).fetchone()
@@ -109,6 +129,54 @@ def _set_awaiting_stakeholder_sync(db_path: str, incident_id: int, awaiting: boo
         cursor = conn.execute(
             "UPDATE incidents SET awaiting_stakeholder_reply = ?, updated_at = ? WHERE id = ?",
             (1 if awaiting else 0, now, incident_id),
+        )
+        conn.commit()
+        return cursor.rowcount > 0
+    finally:
+        conn.close()
+
+
+def _set_priority_sync(db_path: str, incident_id: int, priority: str) -> bool:
+    conn = _connect(db_path)
+    try:
+        now = datetime.now(timezone.utc).isoformat()
+        cursor = conn.execute(
+            "UPDATE incidents SET priority = ?, updated_at = ? WHERE id = ?",
+            (priority, now, incident_id),
+        )
+        conn.commit()
+        return cursor.rowcount > 0
+    finally:
+        conn.close()
+
+
+def _set_checklist_item_sync(db_path: str, incident_id: int, item: str, checked: bool) -> bool:
+    import json
+    conn = _connect(db_path)
+    try:
+        row = conn.execute("SELECT checklist_json FROM incidents WHERE id = ?", (incident_id,)).fetchone()
+        if row is None:
+            return False
+        current = json.loads(row["checklist_json"]) if row["checklist_json"] else {}
+        current[item] = checked
+        now = datetime.now(timezone.utc).isoformat()
+        conn.execute(
+            "UPDATE incidents SET checklist_json = ?, updated_at = ? WHERE id = ?",
+            (json.dumps(current), now, incident_id),
+        )
+        conn.commit()
+        return True
+    finally:
+        conn.close()
+
+
+def _set_confidence_sync(db_path: str, incident_id: int, confidence_percent: int) -> bool:
+    conn = _connect(db_path)
+    try:
+        now = datetime.now(timezone.utc).isoformat()
+        cursor = conn.execute(
+            "UPDATE incidents SET confidence_percent = ?, updated_at = ? WHERE id = ?",
+            (confidence_percent, now, incident_id),
         )
         conn.commit()
         return cursor.rowcount > 0
@@ -379,10 +447,29 @@ class TrackerDB:
         self.db_path = db_path or DEFAULT_DB_PATH
 
     async def create_incident(self, alert_type: str, title: str, description: str | None = None,
-                               external_ticket_ref: str | None = None, affected_user: str | None = None) -> dict:
+                               external_ticket_ref: str | None = None, affected_user: str | None = None,
+                               priority: str = "medium") -> dict:
+        if priority not in VALID_PRIORITIES:
+            raise ValueError(f"Invalid priority {priority!r} - must be one of {VALID_PRIORITIES}")
         return await asyncio.to_thread(
-            _create_incident_sync, self.db_path, alert_type, title, description, external_ticket_ref, affected_user
+            _create_incident_sync, self.db_path, alert_type, title, description, external_ticket_ref,
+            affected_user, priority,
         )
+
+    async def set_priority(self, incident_id: int, priority: str) -> bool:
+        if priority not in VALID_PRIORITIES:
+            raise ValueError(f"Invalid priority {priority!r} - must be one of {VALID_PRIORITIES}")
+        return await asyncio.to_thread(_set_priority_sync, self.db_path, incident_id, priority)
+
+    async def set_checklist_item(self, incident_id: int, item: str, checked: bool) -> bool:
+        if item not in CHECKLIST_ITEMS:
+            raise ValueError(f"Invalid checklist item {item!r} - must be one of {CHECKLIST_ITEMS}")
+        return await asyncio.to_thread(_set_checklist_item_sync, self.db_path, incident_id, item, checked)
+
+    async def set_confidence(self, incident_id: int, confidence_percent: int) -> bool:
+        if not 0 <= confidence_percent <= 100:
+            raise ValueError("confidence_percent must be between 0 and 100")
+        return await asyncio.to_thread(_set_confidence_sync, self.db_path, incident_id, confidence_percent)
 
     async def set_awaiting_stakeholder(self, incident_id: int, awaiting: bool) -> bool:
         return await asyncio.to_thread(_set_awaiting_stakeholder_sync, self.db_path, incident_id, awaiting)

@@ -19,13 +19,13 @@ from pydantic import BaseModel, Field
 
 from . import auth, integrations, telegram_bot
 from .attack_story import build_attack_story
-from .db import TrackerDB
+from .db import CHECKLIST_ITEMS, TrackerDB
 from .detection_gap import compute_detection_gap
 from .investigation_score import compute_investigation_score
 from .mitre_knowledge import get_technique, list_techniques, search_techniques
 from .notifications import notify
 from .pdf_export import build_incidents_pdf
-from .rule_book import SOP_CATEGORIES, seed_rule_book
+from .rule_book import CONFIDENCE_SCALE, SOP_CATEGORIES, SUSPICIOUS_IP_GUIDE, seed_rule_book
 from .scheduler import start_scheduler, stop_scheduler
 from .security_feed import fetch_all_feeds, merge_latest
 from .seed_sops import seed_default_sops
@@ -116,6 +116,20 @@ class CreateIncidentRequest(BaseModel):
     description: str | None = Field(default=None, max_length=MAX_TEXT_LENGTH)
     external_ticket_ref: str | None = Field(default=None, max_length=128)
     affected_user: str | None = Field(default=None, max_length=256)
+    priority: str = Field(default="medium", max_length=16)
+
+
+class PriorityRequest(BaseModel):
+    priority: str = Field(max_length=16)
+
+
+class ChecklistItemRequest(BaseModel):
+    item: str = Field(max_length=128)
+    checked: bool
+
+
+class ConfidenceRequest(BaseModel):
+    confidence_percent: int = Field(ge=0, le=100)
 
 
 class EmergencyIncidentRequest(BaseModel):
@@ -225,12 +239,54 @@ async def list_incidents(status: str | None = None, _user: str = Depends(require
 
 @app.post("/api/incidents")
 async def create_incident(body: CreateIncidentRequest, _user: str = Depends(require_auth)):
-    incident = await db.create_incident(
-        body.alert_type, body.title, body.description, body.external_ticket_ref, body.affected_user
-    )
+    try:
+        incident = await db.create_incident(
+            body.alert_type, body.title, body.description, body.external_ticket_ref, body.affected_user,
+            body.priority,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
     sop = await db.get_sop(body.alert_type)
-    await notify(f"SOC Tracker: new ticket #{incident['id']}", f"[{body.alert_type}] {body.title}")
+    await notify(f"SOC Tracker: new ticket #{incident['id']}", f"[{body.alert_type}] {body.title} (priority: {body.priority})")
     return {"incident": incident, "sop": sop}
+
+
+@app.post("/api/incidents/{incident_id}/priority")
+async def set_priority(incident_id: int, body: PriorityRequest, _user: str = Depends(require_auth)):
+    try:
+        updated = await db.set_priority(incident_id, body.priority)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    if not updated:
+        raise HTTPException(status_code=404, detail="Incident not found.")
+    return {"status": "ok"}
+
+
+@app.get("/api/checklist-items")
+async def checklist_items(_user: str = Depends(require_auth)):
+    return list(CHECKLIST_ITEMS)
+
+
+@app.post("/api/incidents/{incident_id}/checklist")
+async def set_checklist_item(incident_id: int, body: ChecklistItemRequest, _user: str = Depends(require_auth)):
+    try:
+        updated = await db.set_checklist_item(incident_id, body.item, body.checked)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    if not updated:
+        raise HTTPException(status_code=404, detail="Incident not found.")
+    return {"status": "ok"}
+
+
+@app.post("/api/incidents/{incident_id}/confidence")
+async def set_confidence(incident_id: int, body: ConfidenceRequest, _user: str = Depends(require_auth)):
+    try:
+        updated = await db.set_confidence(incident_id, body.confidence_percent)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    if not updated:
+        raise HTTPException(status_code=404, detail="Incident not found.")
+    return {"status": "ok"}
 
 
 EMERGENCY_ALERT_TYPE = "Major Incident"
@@ -332,6 +388,16 @@ async def set_awaiting_stakeholder(incident_id: int, body: AwaitingStakeholderRe
 @app.get("/api/rule-book/categories")
 async def rule_book_categories(_user: str = Depends(require_auth)):
     return SOP_CATEGORIES
+
+
+@app.get("/api/rule-book/confidence-scale")
+async def confidence_scale(_user: str = Depends(require_auth)):
+    return CONFIDENCE_SCALE
+
+
+@app.get("/api/rule-book/suspicious-ip-guide")
+async def suspicious_ip_guide(_user: str = Depends(require_auth)):
+    return SUSPICIOUS_IP_GUIDE
 
 
 @app.get("/api/disposition-history")

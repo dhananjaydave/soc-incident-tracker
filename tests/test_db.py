@@ -19,6 +19,108 @@ async def test_create_and_get_incident(db):
     assert fetched["title"] == "Host X showing C2 traffic"
 
 
+async def test_create_incident_defaults_to_medium_priority(db):
+    created = await db.create_incident("Phishing", "test")
+    assert created["priority"] == "medium"
+
+
+async def test_create_incident_with_explicit_priority(db):
+    created = await db.create_incident("Phishing", "test", priority="high")
+    assert created["priority"] == "high"
+
+
+async def test_create_incident_rejects_invalid_priority(db):
+    with pytest.raises(ValueError):
+        await db.create_incident("Phishing", "test", priority="critical")
+
+
+async def test_set_priority_updates_existing_incident(db):
+    incident = await db.create_incident("Phishing", "test")
+    await db.set_priority(incident["id"], "low")
+    fetched = await db.get_incident(incident["id"])
+    assert fetched["priority"] == "low"
+
+
+async def test_set_priority_rejects_invalid_value(db):
+    incident = await db.create_incident("Phishing", "test")
+    with pytest.raises(ValueError):
+        await db.set_priority(incident["id"], "urgent")
+
+
+async def test_set_priority_on_missing_incident_returns_false(db):
+    result = await db.set_priority(99999, "high")
+    assert result is False
+
+
+async def test_new_incident_has_all_checklist_items_unchecked(db):
+    incident = await db.create_incident("Phishing", "test")
+    assert all(v is False for v in incident["checklist"].values())
+    from tracker.db import CHECKLIST_ITEMS
+    assert set(incident["checklist"].keys()) == set(CHECKLIST_ITEMS)
+
+
+async def test_set_checklist_item_checks_it(db):
+    incident = await db.create_incident("Phishing", "test")
+    await db.set_checklist_item(incident["id"], "Logs reviewed", True)
+    fetched = await db.get_incident(incident["id"])
+    assert fetched["checklist"]["Logs reviewed"] is True
+    assert fetched["checklist"]["User verified"] is False
+
+
+async def test_set_checklist_item_can_uncheck(db):
+    incident = await db.create_incident("Phishing", "test")
+    await db.set_checklist_item(incident["id"], "Logs reviewed", True)
+    await db.set_checklist_item(incident["id"], "Logs reviewed", False)
+    fetched = await db.get_incident(incident["id"])
+    assert fetched["checklist"]["Logs reviewed"] is False
+
+
+async def test_set_checklist_item_rejects_invalid_item(db):
+    incident = await db.create_incident("Phishing", "test")
+    with pytest.raises(ValueError):
+        await db.set_checklist_item(incident["id"], "Not a real item", True)
+
+
+async def test_set_checklist_item_on_missing_incident_returns_false(db):
+    result = await db.set_checklist_item(99999, "Logs reviewed", True)
+    assert result is False
+
+
+async def test_set_checklist_item_preserves_other_items(db):
+    incident = await db.create_incident("Phishing", "test")
+    await db.set_checklist_item(incident["id"], "Logs reviewed", True)
+    await db.set_checklist_item(incident["id"], "Evidence collected", True)
+    fetched = await db.get_incident(incident["id"])
+    assert fetched["checklist"]["Logs reviewed"] is True
+    assert fetched["checklist"]["Evidence collected"] is True
+    assert fetched["checklist"]["SOP followed"] is False
+
+
+async def test_new_incident_has_no_confidence_by_default(db):
+    incident = await db.create_incident("Phishing", "test")
+    assert incident["confidence_percent"] is None
+
+
+async def test_set_confidence_updates_incident(db):
+    incident = await db.create_incident("Phishing", "test")
+    await db.set_confidence(incident["id"], 85)
+    fetched = await db.get_incident(incident["id"])
+    assert fetched["confidence_percent"] == 85
+
+
+async def test_set_confidence_rejects_out_of_range(db):
+    incident = await db.create_incident("Phishing", "test")
+    with pytest.raises(ValueError):
+        await db.set_confidence(incident["id"], 150)
+    with pytest.raises(ValueError):
+        await db.set_confidence(incident["id"], -5)
+
+
+async def test_set_confidence_on_missing_incident_returns_false(db):
+    result = await db.set_confidence(99999, 50)
+    assert result is False
+
+
 async def test_get_nonexistent_incident_returns_none(db):
     assert await db.get_incident(99999) is None
 

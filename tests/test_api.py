@@ -187,6 +187,116 @@ def test_create_incident(client):
     assert body["sop"] is not None  # Phishing has a seeded default SOP
 
 
+def test_create_incident_defaults_to_medium_priority(client):
+    _login(client)
+    resp = client.post("/api/incidents", json={"alert_type": "Phishing", "title": "test"})
+    assert resp.json()["incident"]["priority"] == "medium"
+
+
+def test_create_incident_with_explicit_priority(client):
+    _login(client)
+    resp = client.post("/api/incidents", json={"alert_type": "Phishing", "title": "test", "priority": "high"})
+    assert resp.json()["incident"]["priority"] == "high"
+
+
+def test_create_incident_rejects_invalid_priority(client):
+    _login(client)
+    resp = client.post("/api/incidents", json={"alert_type": "Phishing", "title": "test", "priority": "urgent"})
+    assert resp.status_code == 400
+
+
+def test_set_priority_requires_auth(client):
+    resp = client.post("/api/incidents/1/priority", json={"priority": "high"})
+    assert resp.status_code == 401
+
+
+def test_set_priority_updates_incident(client):
+    _login(client)
+    created = client.post("/api/incidents", json={"alert_type": "Phishing", "title": "test"}).json()["incident"]
+    resp = client.post(f"/api/incidents/{created['id']}/priority", json={"priority": "high"})
+    assert resp.status_code == 200
+    fetched = client.get(f"/api/incidents/{created['id']}").json()["incident"]
+    assert fetched["priority"] == "high"
+
+
+def test_set_priority_invalid_value_rejected(client):
+    _login(client)
+    created = client.post("/api/incidents", json={"alert_type": "Phishing", "title": "test"}).json()["incident"]
+    resp = client.post(f"/api/incidents/{created['id']}/priority", json={"priority": "urgent"})
+    assert resp.status_code == 400
+
+
+def test_set_priority_nonexistent_incident_404(client):
+    _login(client)
+    resp = client.post("/api/incidents/99999/priority", json={"priority": "high"})
+    assert resp.status_code == 404
+
+
+def test_checklist_items_requires_auth(client):
+    resp = client.get("/api/checklist-items")
+    assert resp.status_code == 401
+
+
+def test_checklist_items_returns_six(client):
+    _login(client)
+    resp = client.get("/api/checklist-items")
+    assert len(resp.json()) == 6
+
+
+def test_set_checklist_item_requires_auth(client):
+    resp = client.post("/api/incidents/1/checklist", json={"item": "Logs reviewed", "checked": True})
+    assert resp.status_code == 401
+
+
+def test_set_checklist_item_updates_incident(client):
+    _login(client)
+    created = client.post("/api/incidents", json={"alert_type": "Phishing", "title": "test"}).json()["incident"]
+    resp = client.post(f"/api/incidents/{created['id']}/checklist", json={"item": "Logs reviewed", "checked": True})
+    assert resp.status_code == 200
+    fetched = client.get(f"/api/incidents/{created['id']}").json()["incident"]
+    assert fetched["checklist"]["Logs reviewed"] is True
+
+
+def test_set_checklist_item_invalid_item_rejected(client):
+    _login(client)
+    created = client.post("/api/incidents", json={"alert_type": "Phishing", "title": "test"}).json()["incident"]
+    resp = client.post(f"/api/incidents/{created['id']}/checklist", json={"item": "Not real", "checked": True})
+    assert resp.status_code == 400
+
+
+def test_set_checklist_item_nonexistent_incident_404(client):
+    _login(client)
+    resp = client.post("/api/incidents/99999/checklist", json={"item": "Logs reviewed", "checked": True})
+    assert resp.status_code == 404
+
+
+def test_set_confidence_requires_auth(client):
+    resp = client.post("/api/incidents/1/confidence", json={"confidence_percent": 85})
+    assert resp.status_code == 401
+
+
+def test_set_confidence_updates_incident(client):
+    _login(client)
+    created = client.post("/api/incidents", json={"alert_type": "Phishing", "title": "test"}).json()["incident"]
+    resp = client.post(f"/api/incidents/{created['id']}/confidence", json={"confidence_percent": 85})
+    assert resp.status_code == 200
+    fetched = client.get(f"/api/incidents/{created['id']}").json()["incident"]
+    assert fetched["confidence_percent"] == 85
+
+
+def test_set_confidence_out_of_range_rejected(client):
+    _login(client)
+    created = client.post("/api/incidents", json={"alert_type": "Phishing", "title": "test"}).json()["incident"]
+    resp = client.post(f"/api/incidents/{created['id']}/confidence", json={"confidence_percent": 150})
+    assert resp.status_code == 422
+
+
+def test_set_confidence_nonexistent_incident_404(client):
+    _login(client)
+    resp = client.post("/api/incidents/99999/confidence", json={"confidence_percent": 50})
+    assert resp.status_code == 404
+
+
 def test_create_incident_unknown_alert_type_has_no_sop(client):
     _login(client)
     resp = client.post("/api/incidents", json={"alert_type": "Totally Custom Type", "title": "test"})
@@ -483,11 +593,33 @@ def test_rule_book_categories_requires_auth(client):
     assert resp.status_code == 401
 
 
-def test_rule_book_categories_returns_six(client):
+def test_rule_book_categories_returns_seven(client):
     _login(client)
     resp = client.get("/api/rule-book/categories")
     assert resp.status_code == 200
-    assert len(resp.json()) == 6
+    assert len(resp.json()) == 7
+
+
+def test_confidence_scale_requires_auth(client):
+    resp = client.get("/api/rule-book/confidence-scale")
+    assert resp.status_code == 401
+
+
+def test_confidence_scale_returns_bands(client):
+    _login(client)
+    resp = client.get("/api/rule-book/confidence-scale")
+    assert len(resp.json()) == 4
+
+
+def test_suspicious_ip_guide_requires_auth(client):
+    resp = client.get("/api/rule-book/suspicious-ip-guide")
+    assert resp.status_code == 401
+
+
+def test_suspicious_ip_guide_returns_steps(client):
+    _login(client)
+    resp = client.get("/api/rule-book/suspicious-ip-guide")
+    assert resp.json()["steps"]
 
 
 def test_disposition_history_route_requires_auth(client):
