@@ -15,7 +15,10 @@ import bcrypt
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 
 SESSION_COOKIE_NAME = "tracker_session"
-SESSION_MAX_AGE_SECONDS = 7 * 24 * 3600  # 7 days
+# A 12h session covers a full shift without forcing a re-login mid-shift,
+# while still expiring daily rather than staying valid indefinitely on a
+# device that's lost, shared, or left unlocked.
+SESSION_MAX_AGE_SECONDS = int(os.environ.get("TRACKER_SESSION_MAX_AGE_SECONDS", str(12 * 3600)))
 
 LOGIN_RATE_LIMIT_WINDOW_SECONDS = 900  # 15 minutes
 LOGIN_RATE_LIMIT_MAX_ATTEMPTS = 5
@@ -31,6 +34,13 @@ def _secret_key() -> str:
 
 def _serializer() -> URLSafeTimedSerializer:
     return URLSafeTimedSerializer(_secret_key(), salt="tracker-session")
+
+
+# A precomputed bcrypt hash with no corresponding real password - used to
+# keep a wrong-username login attempt taking the same ~100ms as a
+# wrong-password one, instead of returning near-instantly. Generated
+# once, hardcoded (it's not a secret - nothing maps to it).
+DUMMY_HASH = "$2b$12$iMKkhrdjZehIwkZKht488./AQ1VzxmtlQV4hjnJ6vMzAdAiXkzwKC"
 
 
 def hash_password(password: str) -> str:

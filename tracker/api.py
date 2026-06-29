@@ -167,7 +167,13 @@ async def login(body: LoginRequest, request: Request, response: Response):
     if not current_hash:
         raise HTTPException(status_code=500, detail="Server not configured - no admin password set.")
 
-    if body.username != ADMIN_USERNAME or not auth.verify_password(body.password, current_hash):
+    # Always run the (deliberately slow) bcrypt check, even on a wrong
+    # username, against a dummy hash - otherwise a wrong username returns
+    # near-instantly while a wrong password takes ~100ms, a timing
+    # side-channel that reveals whether "admin" is the right username.
+    username_correct = body.username == ADMIN_USERNAME
+    password_correct = auth.verify_password(body.password, current_hash if username_correct else auth.DUMMY_HASH)
+    if not username_correct or not password_correct:
         raise HTTPException(status_code=401, detail="Invalid username or password.")
 
     auth.reset_rate_limit(ip)

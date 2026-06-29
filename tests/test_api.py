@@ -81,6 +81,23 @@ def test_login_with_wrong_username(client):
     assert resp.status_code == 401
 
 
+def test_login_wrong_username_and_wrong_password_take_similar_time(client):
+    """A wrong username shouldn't short-circuit before the bcrypt check -
+    that timing difference would let an attacker learn whether 'admin' is
+    correct just from response latency, without any password attempt."""
+    import time
+    start = time.perf_counter()
+    client.post("/login", json={"username": "notadmin", "password": "wrong"})
+    wrong_username_time = time.perf_counter() - start
+
+    start = time.perf_counter()
+    client.post("/login", json={"username": "admin", "password": "wrong"})
+    wrong_password_time = time.perf_counter() - start
+
+    assert wrong_username_time > 0.05  # actually ran the slow bcrypt check, didn't short-circuit
+    assert abs(wrong_username_time - wrong_password_time) < 0.1
+
+
 def test_login_rate_limited_after_threshold(client):
     for _ in range(auth.LOGIN_RATE_LIMIT_MAX_ATTEMPTS):
         client.post("/login", json={"username": "admin", "password": "wrong"})

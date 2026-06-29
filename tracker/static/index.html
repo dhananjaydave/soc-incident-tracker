@@ -423,6 +423,15 @@
 
   function clearChildren(el) { while (el.firstChild) el.removeChild(el.firstChild); }
 
+  // RSS feed content comes from third-party sources, not our own backend -
+  // before setting it as a clickable href/src, make sure it's actually
+  // http(s), not a javascript: URL a compromised/malicious feed could supply.
+  function isSafeUrl(url) {
+    if (!url) return false;
+    try { return ['http:', 'https:'].includes(new URL(url, window.location.origin).protocol); }
+    catch (err) { return false; }
+  }
+
   let toastTimer = null;
   function showToast(message, isError) {
     const toast = document.getElementById('toast');
@@ -433,10 +442,21 @@
     toastTimer = setTimeout(() => { toast.style.display = 'none'; }, 5000);
   }
 
-  async function api(path, options = {}) {
-    const resp = await fetch(path, { ...options, headers: { 'Content-Type': 'application/json', ...(options.headers || {}) } });
-    if (resp.status === 401) { showLogin(); throw new Error('Not authenticated'); }
+  // path/options as given to fetch(); when isAuthCheck is true, a 401
+  // means "not logged in" and should bounce to the login screen. When
+  // false (e.g. the /login call itself, or a wrong-password retry), a
+  // 401 just means "that request was rejected" - show the server's own
+  // detail message instead of masking it with a generic one.
+  async function api(path, options = {}, isAuthCheck = true) {
+    let resp;
+    try {
+      resp = await fetch(path, { ...options, headers: { 'Content-Type': 'application/json', ...(options.headers || {}) } });
+    } catch (networkErr) {
+      console.error('Network error calling', path, networkErr);
+      throw new Error('Network error - could not reach the server.');
+    }
     const data = await resp.json().catch(() => ({}));
+    if (resp.status === 401 && isAuthCheck) { showLogin(); throw new Error('Session expired - please log in again.'); }
     if (!resp.ok) throw new Error(data.detail || `Error ${resp.status}`);
     return data;
   }
@@ -444,9 +464,15 @@
   // For multipart/form-data requests (file uploads) - no Content-Type header,
   // the browser sets the correct multipart boundary itself.
   async function apiUpload(path, formData) {
-    const resp = await fetch(path, { method: 'POST', body: formData });
-    if (resp.status === 401) { showLogin(); throw new Error('Not authenticated'); }
+    let resp;
+    try {
+      resp = await fetch(path, { method: 'POST', body: formData });
+    } catch (networkErr) {
+      console.error('Network error calling', path, networkErr);
+      throw new Error('Network error - could not reach the server.');
+    }
     const data = await resp.json().catch(() => ({}));
+    if (resp.status === 401) { showLogin(); throw new Error('Session expired - please log in again.'); }
     if (!resp.ok) throw new Error(data.detail || `Error ${resp.status}`);
     return data;
   }
@@ -461,11 +487,13 @@
     dashboardView.style.display = 'block';
     const me = await api('/api/me');
     document.getElementById('whoami').textContent = me.username;
-    await loadRuleBookCategories();
-    await loadSops();
-    await loadTickets('');
-    await loadSummary();
-    await loadMitreList();
+    // Each panel loads independently - one failing (e.g. a slow MITRE
+    // fetch) must not block the others or leave the dashboard half-built
+    // with no visible error.
+    const results = await Promise.allSettled([
+      loadRuleBookCategories(), loadSops(), loadTickets(''), loadSummary(), loadMitreList(),
+    ]);
+    results.forEach((r, i) => { if (r.status === 'rejected') console.error('Dashboard panel', i, 'failed to load:', r.reason); });
   }
 
   document.getElementById('login-form').addEventListener('submit', async (e) => {
@@ -481,9 +509,10 @@
           username: document.getElementById('login-username').value,
           password: document.getElementById('login-password').value,
         }),
-      });
+      }, false);
       await showDashboard();
     } catch (err) {
+      console.error('Login failed:', err);
       errorBox.textContent = err.message;
       errorBox.style.display = 'block';
     } finally {
@@ -859,7 +888,7 @@
   function buildFeedCard(entry) {
     const card = document.createElement('div');
     card.className = 'feed-card';
-    if (entry.image) {
+    if (entry.image && isSafeUrl(entry.image)) {
       const img = document.createElement('img');
       img.className = 'feed-card-img'; img.src = entry.image; img.alt = '';
       img.loading = 'lazy';
@@ -879,9 +908,13 @@
       body.appendChild(cveRow);
     }
     const titleDiv = document.createElement('div'); titleDiv.className = 'feed-card-title';
-    const a = document.createElement('a');
-    a.href = entry.link; a.target = '_blank'; a.rel = 'noopener noreferrer'; a.textContent = entry.title;
-    titleDiv.appendChild(a);
+    if (isSafeUrl(entry.link)) {
+      const a = document.createElement('a');
+      a.href = entry.link; a.target = '_blank'; a.rel = 'noopener noreferrer'; a.textContent = entry.title;
+      titleDiv.appendChild(a);
+    } else {
+      titleDiv.textContent = entry.title;
+    }
     body.appendChild(titleDiv);
     card.appendChild(body);
     return card;
@@ -915,10 +948,14 @@
             const div = document.createElement('div');
             div.className = 'feed-entry';
             appendCveBadges(div, entry.cve_ids);
-            const a = document.createElement('a');
-            a.href = entry.link; a.target = '_blank'; a.rel = 'noopener noreferrer';
-            a.textContent = entry.title;
-            div.appendChild(a);
+            if (isSafeUrl(entry.link)) {
+              const a = document.createElement('a');
+              a.href = entry.link; a.target = '_blank'; a.rel = 'noopener noreferrer';
+              a.textContent = entry.title;
+              div.appendChild(a);
+            } else {
+              div.appendChild(document.createTextNode(entry.title));
+            }
             block.appendChild(div);
           }
         }
@@ -1119,8 +1156,11 @@
     }
   }
 
-  // On load, check if already logged in (session cookie still valid).
-  api('/api/me').then(showDashboard).catch(() => showLogin());
+  // On load, check if already logged in (session cookie still valid -
+  // this is normal session persistence, the same as any site that
+  // doesn't make you log in on every page refresh; session length is
+  // capped server-side, see auth.SESSION_MAX_AGE_SECONDS).
+  api('/api/me').then(showDashboard).catch((err) => { console.error('Session check failed:', err); showLogin(); });
 </script>
 </body>
 </html>
