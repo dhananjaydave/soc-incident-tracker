@@ -135,6 +135,19 @@
   .similar-incident-item:last-child { border-bottom: none; }
   .similar-incident-item:hover { color: var(--accent); }
 
+  .timeline-item { display: flex; gap: 0.8rem; padding: 0.5rem 0; border-left: 2px solid var(--border); margin-left: 0.4rem; padding-left: 1rem; position: relative; }
+  .timeline-item::before { content: ''; position: absolute; left: -5px; top: 0.75rem; width: 8px; height: 8px; border-radius: 50%; background: var(--accent); }
+  .timeline-time { font-family: var(--mono); font-size: 0.72rem; color: var(--text-dim); flex-shrink: 0; white-space: nowrap; }
+  .timeline-desc { font-size: 0.85rem; cursor: pointer; }
+  .timeline-desc:hover { color: var(--accent); }
+
+  .chain-flow { display: flex; align-items: center; flex-wrap: wrap; gap: 0; }
+  .chain-node { background: #070a12; border: 1px solid var(--border); border-radius: 9px; padding: 0.7rem 0.9rem; cursor: pointer; min-width: 140px; transition: border-color 0.15s; }
+  .chain-node:hover { border-color: var(--accent); }
+  .chain-node .alert-type { font-weight: 600; font-size: 0.84rem; }
+  .chain-node .status { font-family: var(--mono); font-size: 0.7rem; color: var(--text-dim); text-transform: uppercase; margin-top: 0.2rem; }
+  .chain-arrow { color: var(--text-dim); font-size: 1.1rem; padding: 0 0.6rem; flex-shrink: 0; }
+
   .score-box { background: #070a12; border: 1px solid var(--border); border-radius: 9px; padding: 1rem; margin: 0.6rem 0 1rem; font-size: 0.85rem; }
   .score-bar-track { background: #050810; border-radius: 100px; height: 8px; overflow: hidden; margin-bottom: 0.8rem; }
   .score-bar-fill { height: 100%; background: var(--clean); border-radius: 100px; transition: width 0.2s; }
@@ -335,6 +348,18 @@
             <button type="submit">Add note</button>
           </form>
         </div>
+        <div class="panel">
+          <h2>Replay</h2>
+          <button class="secondary" id="replay-start-btn">Replay this incident's timeline</button>
+          <div id="replay-player" style="display:none; margin-top:1rem;">
+            <div class="score-box" id="replay-event-box"></div>
+            <div class="action-row">
+              <button class="secondary" id="replay-prev-btn">&larr; Previous</button>
+              <span id="replay-step-counter" style="color:var(--text-dim); font-size:0.85rem;"></span>
+              <button class="secondary" id="replay-next-btn">Next &rarr;</button>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
 
@@ -380,6 +405,16 @@
         </div>
         <button id="user-search-btn">Search</button>
         <ul class="ticket-list" id="user-history-list" style="margin-top:1rem;"></ul>
+      </div>
+      <div class="panel" id="attack-chain-panel" style="display:none;">
+        <h2>Attack chain</h2>
+        <p class="lede" style="margin-bottom:1rem;">This user's incidents in order, left to right.</p>
+        <div id="attack-chain-flow"></div>
+      </div>
+      <div class="panel" id="attack-story-panel" style="display:none;">
+        <h2>Attack story</h2>
+        <p class="lede" style="margin-bottom:1rem;">Every event across this user's incidents, merged into one timeline.</p>
+        <div id="attack-story-timeline"></div>
       </div>
     </div>
 
@@ -853,10 +888,13 @@
   });
 
   let currentTicketId = null;
+  let currentIncidentData = null;
 
   async function showDetail(id) {
     currentTicketId = id;
     const data = await api(`/api/incidents/${id}`);
+    currentIncidentData = data;
+    document.getElementById('replay-player').style.display = 'none';
     listView.style.display = 'none';
     detailView.style.display = 'block';
 
@@ -1010,6 +1048,59 @@
     });
     textEl.value = '';
     await showDetail(currentTicketId);
+  });
+
+  // --- Replay (SOC Netflix) ---
+  let replayEvents = [];
+  let replayIndex = 0;
+
+  function buildReplayEvents() {
+    if (!currentIncidentData) return [];
+    const incident = currentIncidentData.incident;
+    const events = [{
+      timestamp: incident.created_at,
+      label: `Created: [${incident.alert_type}] ${incident.title}`,
+    }];
+    for (const u of currentIncidentData.updates) {
+      events.push({ timestamp: u.created_at, label: `Note: ${u.note}` });
+    }
+    if (incident.resolved_at) {
+      const reason = incident.disposition_reason ? ` - ${incident.disposition_reason}` : '';
+      events.push({ timestamp: incident.resolved_at, label: `Marked ${incident.status}${reason}` });
+    }
+    return events.sort((a, b) => a.timestamp.localeCompare(b.timestamp));
+  }
+
+  function renderReplayStep() {
+    const event = replayEvents[replayIndex];
+    const box = document.getElementById('replay-event-box');
+    clearChildren(box);
+    const time = document.createElement('div');
+    time.style.color = 'var(--text-dim)'; time.style.fontSize = '0.78rem'; time.style.marginBottom = '0.4rem';
+    time.textContent = formatTimestamp(event.timestamp);
+    const label = document.createElement('div');
+    label.style.fontSize = '0.9rem';
+    label.textContent = event.label;
+    box.appendChild(time); box.appendChild(label);
+    document.getElementById('replay-step-counter').textContent = `${replayIndex + 1} / ${replayEvents.length}`;
+    document.getElementById('replay-prev-btn').disabled = replayIndex === 0;
+    document.getElementById('replay-next-btn').disabled = replayIndex === replayEvents.length - 1;
+  }
+
+  document.getElementById('replay-start-btn').addEventListener('click', () => {
+    replayEvents = buildReplayEvents();
+    if (!replayEvents.length) return;
+    replayIndex = 0;
+    document.getElementById('replay-player').style.display = 'block';
+    renderReplayStep();
+  });
+
+  document.getElementById('replay-prev-btn').addEventListener('click', () => {
+    if (replayIndex > 0) { replayIndex -= 1; renderReplayStep(); }
+  });
+
+  document.getElementById('replay-next-btn').addEventListener('click', () => {
+    if (replayIndex < replayEvents.length - 1) { replayIndex += 1; renderReplayStep(); }
   });
 
   // --- MITRE Knowledge ---
@@ -1186,6 +1277,8 @@
       const li = document.createElement('li');
       li.textContent = `No past incidents found for '${username}'.`;
       list.appendChild(li);
+      document.getElementById('attack-story-panel').style.display = 'none';
+      document.getElementById('attack-chain-panel').style.display = 'none';
       return;
     }
     for (const t of history) {
@@ -1199,10 +1292,50 @@
       li.appendChild(left);
       li.appendChild(badge);
       li.addEventListener('click', () => {
-        document.querySelector('.tab-btn[data-tab="tickets"]').click();
+        activateTab('tickets');
         showDetail(t.id);
       });
       list.appendChild(li);
+    }
+
+    const chainPanel = document.getElementById('attack-chain-panel');
+    const chainFlow = document.getElementById('attack-chain-flow');
+    clearChildren(chainFlow);
+    chainPanel.style.display = 'block';
+    const chronological = [...history].reverse();
+    chronological.forEach((t, i) => {
+      const node = document.createElement('div');
+      node.className = 'chain-node';
+      const alertType = document.createElement('div'); alertType.className = 'alert-type'; alertType.textContent = `[${t.alert_type}]`;
+      const status = document.createElement('div'); status.className = 'status'; status.textContent = t.status.replace('_', ' ');
+      node.appendChild(alertType); node.appendChild(status);
+      node.addEventListener('click', () => { activateTab('tickets'); showDetail(t.id); });
+      chainFlow.appendChild(node);
+      if (i < chronological.length - 1) {
+        const arrow = document.createElement('span'); arrow.className = 'chain-arrow'; arrow.textContent = '→';
+        chainFlow.appendChild(arrow);
+      }
+    });
+
+    const story = await api(`/api/users/${encodeURIComponent(username)}/attack-story`);
+    const storyPanel = document.getElementById('attack-story-panel');
+    const timeline = document.getElementById('attack-story-timeline');
+    clearChildren(timeline);
+    if (story.length) {
+      storyPanel.style.display = 'block';
+      for (const event of story) {
+        const item = document.createElement('div');
+        item.className = 'timeline-item';
+        const time = document.createElement('span'); time.className = 'timeline-time';
+        time.textContent = formatTimestamp(event.timestamp);
+        const desc = document.createElement('span'); desc.className = 'timeline-desc';
+        desc.textContent = event.description;
+        desc.addEventListener('click', () => { activateTab('tickets'); showDetail(event.incident_id); });
+        item.appendChild(time); item.appendChild(desc);
+        timeline.appendChild(item);
+      }
+    } else {
+      storyPanel.style.display = 'none';
     }
   });
 

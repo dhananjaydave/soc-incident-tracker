@@ -313,6 +313,26 @@ def test_user_history(client):
     assert history[0]["affected_user"] == "jdoe"
 
 
+def test_attack_story_requires_auth(client):
+    resp = client.get("/api/users/jdoe/attack-story")
+    assert resp.status_code == 401
+
+
+def test_attack_story_returns_chronological_events(client):
+    _login(client)
+    client.post("/api/incidents", json={"alert_type": "Phishing", "title": "test", "affected_user": "jdoe"})
+    resp = client.get("/api/users/jdoe/attack-story")
+    story = resp.json()
+    assert len(story) == 1
+    assert "created" in story[0]["description"]
+
+
+def test_attack_story_empty_for_unknown_user(client):
+    _login(client)
+    resp = client.get("/api/users/nosuchuser/attack-story")
+    assert resp.json() == []
+
+
 def test_user_history_requires_auth(client):
     resp = client.get("/api/users/jdoe/history")
     assert resp.status_code == 401

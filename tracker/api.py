@@ -18,6 +18,7 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel, Field
 
 from . import auth, integrations, telegram_bot
+from .attack_story import build_attack_story
 from .db import TrackerDB
 from .detection_gap import compute_detection_gap
 from .investigation_score import compute_investigation_score
@@ -255,6 +256,11 @@ async def shift_summary(hours: int = 8, _user: str = Depends(require_auth)):
 @app.get("/api/users/{username}/history")
 async def user_history(username: str, _user: str = Depends(require_auth)):
     return await db.get_user_history(username)
+
+
+@app.get("/api/users/{username}/attack-story")
+async def user_attack_story(username: str, _user: str = Depends(require_auth)):
+    return await build_attack_story(db, username)
 
 
 @app.get("/api/incidents/export")
