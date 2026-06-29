@@ -9,12 +9,12 @@ workflow. Closure is verified - you can't resolve a ticket without a
 disposition reason, or while still awaiting a stakeholder reply.
 
 Bidirectional Telegram bot included - acknowledge, close, or escalate
-tickets without opening the dashboard, get a shift summary on demand,
-and get pinged on: new tickets, ticket status changes, logins,
-brute-force login attempts, password changes, stale tickets, new
-high-severity CVEs, new entries on CISA's Known Exploited Vulnerabilities
-catalog, and if one of the internal tools below goes unreachable. Email
-(Gmail SMTP) is a backup channel for all of the above, optional.
+tickets without opening the dashboard, get a shift summary or daily
+digest on demand, and get pinged on: new tickets, ticket status changes,
+logins, brute-force login attempts, password changes, stale tickets,
+new high-severity CVEs, new entries on CISA's Known Exploited
+Vulnerabilities catalog, and if one of the internal tools below goes
+unreachable.
 
 An "Investigate" tab calls the three other SOC Lab tools - IOC
 Enrichment, Phishing Triage, File Analyser - directly over localhost, so
@@ -57,12 +57,14 @@ into your own.
   Analyser over localhost for the Investigate tab.
 - **`telegram_bot.py`** - private, allowlisted-chat-id bot. `/tickets`,
   `/close <id> <note>`, `/escalate <id> <reason>`, `/falsepositive <id>
-  <reason>`, `/note <id> <text>`, `/sop <alert type>`, `/summary [hours]`.
-- **`notifications.py` / `email_notifier.py`** - combines Telegram
-  (always) and email (optional, Gmail SMTP) into one notify call.
-- **`scheduler.py`** - three background jobs: stale-ticket reminders,
-  CVE/KEV monitoring (`cve_monitor.py`), and internal-tool reachability
-  checks (`health_check.py`, only notifies on a state change).
+  <reason>`, `/note <id> <text>`, `/sop <alert type>`, `/summary [hours]`,
+  `/digest`.
+- **`notifications.py`** - formats every notification site's
+  (subject, body) into one Telegram message, in one place.
+- **`scheduler.py`** - four background jobs: stale-ticket reminders,
+  CVE/KEV monitoring (`cve_monitor.py`), internal-tool reachability
+  checks (`health_check.py`, only notifies on a state change), and a
+  daily digest (`daily_digest.py`).
 - **`mitre_knowledge.py`** - 55 curated MITRE ATT&CK techniques across
   all 14 tactics - what it looks like, common false positives, what to
   do next.
