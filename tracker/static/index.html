@@ -766,6 +766,21 @@
       container.appendChild(cat);
     }
     const s = sop.structured;
+    if (s && s.mitre_techniques && s.mitre_techniques.length) {
+      const h4 = document.createElement('h4'); h4.textContent = 'MITRE ATT&CK techniques';
+      container.appendChild(h4);
+      const tagsBox = document.createElement('div'); tagsBox.style.marginBottom = '0.6rem';
+      for (const techId of s.mitre_techniques) {
+        const technique = mitreCache.find(t => t.id === techId);
+        const tag = document.createElement('span');
+        tag.className = 'mitre-tag';
+        tag.textContent = technique ? `${technique.id} ${technique.name}` : techId;
+        if (technique) tag.title = technique.tactic;
+        tag.addEventListener('click', () => { activateTab('knowledge'); showMitreDetail(techId); });
+        tagsBox.appendChild(tag);
+      }
+      container.appendChild(tagsBox);
+    }
     if (s && s.investigation_steps && s.investigation_steps.length) {
       appendListSection(container, 'Investigation steps', s.investigation_steps);
     } else {
