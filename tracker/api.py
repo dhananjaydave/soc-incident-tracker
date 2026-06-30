@@ -32,8 +32,6 @@ from .rule_catalog import SOP_CATEGORIES as RULE_CATALOG_SOP_CATEGORIES
 from .rule_catalog import guess_sop_from_title, lookup_catalog_entry
 from .scheduler import start_scheduler, stop_scheduler
 from .security_feed import fetch_all_feeds, merge_latest
-from .seed_sops import seed_default_sops
-
 db = TrackerDB()
 
 # Most JSON API routes are tiny - this stays small. File-upload routes
@@ -51,7 +49,6 @@ _rate_limit_notified_at: dict[str, float] = {}
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    await seed_default_sops(db)
     await seed_rule_book(db)
     start_scheduler(db)
     yield

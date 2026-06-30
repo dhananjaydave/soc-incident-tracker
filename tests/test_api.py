@@ -190,11 +190,11 @@ def test_me_endpoint(client):
 
 def test_create_incident(client):
     _login(client)
-    resp = client.post("/api/incidents", json={"alert_type": "Phishing", "title": "Suspicious email reported"})
+    resp = client.post("/api/incidents", json={"alert_type": "O365 Phishing Alert", "title": "Suspicious email reported"})
     assert resp.status_code == 200
     body = resp.json()
     assert body["incident"]["status"] == "open"
-    assert body["sop"] is not None  # Phishing has a seeded default SOP
+    assert body["sop"] is not None  # O365 Phishing Alert has a Rule Book entry
 
 
 def test_create_incident_defaults_to_medium_priority(client):
@@ -589,7 +589,7 @@ def test_emergency_incident_appears_in_ticket_list(client):
 
 def test_get_incident_with_updates_and_sop(client):
     _login(client)
-    created = client.post("/api/incidents", json={"alert_type": "Phishing", "title": "test"}).json()["incident"]
+    created = client.post("/api/incidents", json={"alert_type": "O365 Phishing Alert", "title": "test"}).json()["incident"]
     client.post(f"/api/incidents/{created['id']}/notes", json={"note": "checked headers"})
     resp = client.get(f"/api/incidents/{created['id']}")
     body = resp.json()
@@ -798,12 +798,15 @@ def test_list_incidents_filtered_by_status(client):
     assert len(resp.json()) == 1
 
 
-def test_sops_list_includes_seeded_defaults(client):
+def test_sops_list_includes_rule_book_entries(client):
     _login(client)
     resp = client.get("/api/sops")
     alert_types = {s["alert_type"] for s in resp.json()}
-    assert "Phishing" in alert_types
-    assert "System Compromise" in alert_types
+    assert "O365 Phishing Alert" in alert_types
+    assert "Major Incident" in alert_types
+    # The old generic placeholder SOPs (seed_sops.py, retired) must not reappear.
+    assert "Phishing" not in alert_types
+    assert "System Compromise" not in alert_types
 
 
 def test_upsert_sop_adds_new_alert_type(client):

@@ -14,9 +14,14 @@ those sections map onto fields that already existed for other reasons
 disposition_reason) - only the genuinely new sections get their own
 field here, to avoid duplicating the same content twice under two names.
 
-Seeded the same way as seed_sops.py - upsert_sop() only overwrites, so
-editing a rule later (via the API) is never undone by a restart, and
-adding a new rule here later never deletes one a user already customized.
+upsert_sop() only overwrites, so editing a rule later (via the API) is
+never undone by a restart, and adding a new rule here later never
+deletes one a user already customized. (An earlier, generic placeholder
+seed_sops.py - 6 alert types with no structured data, e.g. bare
+"Phishing"/"Brute Force" - was retired once this Rule Book covered the
+same ground with real structured content; its alert_type strings never
+matched these ones exactly so it was silently coexisting as dead weight
+in the dropdown rather than being overwritten as originally intended.)
 """
 
 from __future__ import annotations
@@ -122,10 +127,33 @@ RULE_BOOK: dict[str, dict] = {
             "logic": "10+ failed authentications against the same account(s) from one source IP within a short window.",
             "confidence_guidance": "High account-attempt-count + zero successes from a low-reputation IP = high confidence true positive. A single account with one or two failures is usually just a mistyped password.",
         },
+        # Adapted from the team's real SOP-01 (VPN/Auth/Brute Force/Password
+        # Spraying) document, trimmed from the SOP's full eval/coalesce
+        # chains to the core pattern - index/field names are authentic,
+        # not invented.
         "splunk_queries": [
-            {"name": "Find the brute-force pattern", "query": "index=vpn action=failure | stats count by src_ip, user | where count > 10"},
-            {"name": "Check if any attempt succeeded", "query": "index=vpn src_ip=<ip> | stats count by action"},
-            {"name": "Check a specific user's login history", "query": "index=vpn user=<username> | sort -_time | table _time, action, src_ip"},
+            {"name": "Confirm the notable (SOP-01 L1)", "query": (
+                "index=notable earliest=-30d@d latest=now\n"
+                "| search search_name=\"<rule_name>\" OR correlation_search_name=\"<rule_name>\"\n"
+                "| eval alert_id_reference_id=coalesce(alert_id, reference_id, notable_id, event_id, orig_rid, sid, _cd)\n"
+                "| table _time search_name severity urgency status user src_ip dest_ip host alert_id_reference_id owner\n"
+                "| sort - _time"
+            )},
+            {"name": "Duplicate / related alert check (SOP-01 L1)", "query": (
+                "index=notable earliest=-7d@d latest=now\n"
+                "| search src_ip=\"<ip>\" OR src=\"<ip>\" OR source_ip=\"<ip>\" OR user=\"<username>\" OR username=\"<username>\"\n"
+                "| table _time search_name severity urgency status user src_ip host owner\n"
+                "| sort - _time"
+            )},
+            {"name": "Failed-authentication pattern by source IP (SOP-01 L1)", "query": (
+                "(index=pan_system OR index=office365 OR index=azure_security) earliest=-24h latest=now\n"
+                "(src_ip=\"<ip>\" OR src=\"<ip>\" OR user=\"<username>\" OR username=\"<username>\")\n"
+                "(action=failure OR action=failed OR result=failure OR authentication_result=failure)\n"
+                "| eval normalized_user=coalesce(user, username, src_user, account_name)\n"
+                "| eval normalized_src_ip=coalesce(src_ip, src, source_ip, client_ip)\n"
+                "| stats count as failure_count dc(normalized_user) as unique_users values(normalized_user) as users by normalized_src_ip\n"
+                "| sort - failure_count"
+            )},
         ],
         "ip_check_guide": (
             "Pull the source IP's reputation via the Investigate tab (AbuseIPDB score, VirusTotal detections, ASN). "
@@ -216,10 +244,33 @@ RULE_BOOK: dict[str, dict] = {
             "logic": "5+ failed logins across 3+ different user accounts from the same source IP within a 10-minute window.",
             "confidence_guidance": "85% typical confidence when the account-diversity and IP-singularity conditions both hold cleanly with no successful login mixed in.",
         },
+        # Same source SOP-01 as GP-VPN Brute Force Attempts (spraying is
+        # SOP-01's "many accounts, few attempts" pattern, brute force is
+        # "one account, many attempts") - same notable/duplicate queries,
+        # plus the spray-specific account-diversity pattern.
         "splunk_queries": [
-            {"name": "Find the spray pattern", "query": "index=auth action=failure | stats dc(user) as accounts_targeted by src_ip | where accounts_targeted > 3"},
-            {"name": "Check if any login succeeded", "query": "index=auth src_ip=<ip> | stats count by action, user"},
-            {"name": "Check a specific user's login history", "query": "index=auth user=<username> | sort -_time | table _time, action, src_ip"},
+            {"name": "Find the spray pattern - many accounts, one source (SOP-01 L2)", "query": (
+                "(index=pan_system OR index=office365 OR index=azure_security) earliest=-24h latest=now\n"
+                "(action=failure OR action=failed OR result=failure OR authentication_result=failure)\n"
+                "| eval normalized_user=coalesce(user, username, src_user, account_name)\n"
+                "| eval normalized_src_ip=coalesce(src_ip, src, source_ip, client_ip)\n"
+                "| stats count as failure_count dc(normalized_user) as accounts_targeted values(normalized_user) as users by normalized_src_ip\n"
+                "| where accounts_targeted > 3\n"
+                "| sort - accounts_targeted"
+            )},
+            {"name": "Check whether any targeted account succeeded after failures (SOP-01 L2)", "query": (
+                "(index=pan_system OR index=office365 OR index=azure_security) earliest=-24h latest=now\n"
+                "(src_ip=\"<ip>\" OR user=\"<username>\")\n"
+                "(action=success OR result=success OR authentication_result=success)\n"
+                "| eval normalized_user=coalesce(user, username, src_user, account_name)\n"
+                "| table _time normalized_user src_ip dest action result"
+            )},
+            {"name": "Confirm the notable (SOP-01 L1)", "query": (
+                "index=notable earliest=-30d@d latest=now\n"
+                "| search search_name=\"<rule_name>\" OR correlation_search_name=\"<rule_name>\"\n"
+                "| table _time search_name severity urgency status user src_ip dest_ip host owner\n"
+                "| sort - _time"
+            )},
         ],
         "ip_check_guide": (
             "Same approach as brute force, but cross-check the IP against OTHER tenants/customers if your "
@@ -310,7 +361,26 @@ RULE_BOOK: dict[str, dict] = {
             "logic": "Microsoft's own risk engine - impossible travel, anonymous IP/Tor, unfamiliar sign-in properties, or a credential found in a leak corpus.",
             "confidence_guidance": "Treat Microsoft's own risk LEVEL (low/medium/high) as a starting confidence, then adjust down if the user confirms legitimate travel/VPN use.",
         },
+        # First two adapted from the team's real SOP-03 (Risky Sign-in/
+        # Identity Risk) document, authentic index/field names; the
+        # remaining three are this app's own downstream-access checks
+        # (mailbox/inbox-rule abuse after a successful risky sign-in),
+        # which the real SOP covers more generally - kept since they're
+        # specific and not redundant with the SOP-03 queries below.
         "splunk_queries": [
+            {"name": "Confirm the notable (SOP-03 L1)", "query": (
+                "index=notable earliest=-30d@d latest=now\n"
+                "| search search_name=\"<rule_name>\" OR correlation_search_name=\"<rule_name>\" OR user=\"<user>\"\n"
+                "| table _time search_name severity urgency status user src_ip country asn risk_level risk_reason sign_in_result app device host owner\n"
+                "| sort - _time"
+            )},
+            {"name": "User baseline - last 30 days (SOP-03 L1)", "query": (
+                "(index=azure_security OR index=office365 OR index=cia-sso-prod) earliest=-30d@d latest=now\n"
+                "(user=\"<user>\" OR username=\"<user>\" OR UserId=\"<user>\")\n"
+                "| eval normalized_src_ip=coalesce(src_ip, src, source_ip, client_ip, ClientIP)\n"
+                "| stats count as event_count earliest(_time) as first_seen latest(_time) as last_seen values(normalized_src_ip) as source_ips values(country) as countries values(asn) as asns by user\n"
+                "| convert ctime(first_seen) ctime(last_seen)"
+            )},
             {"name": "Cross-check mailbox access after sign-in", "query": "index=o365 eventtype=mailitemsaccessed user=<user> earliest=<signin_time>"},
             {"name": "Check for new inbox/forwarding rules", "query": "index=o365 Operation=\"New-InboxRule\" OR Operation=\"Set-Mailbox\" user=<user>"},
             {"name": "Check the user's recent sign-in history", "query": "index=o365 eventtype=signin user=<user> | sort -_time | table _time, src_ip, location, risk_level"},
@@ -320,6 +390,10 @@ RULE_BOOK: dict[str, dict] = {
             "user's normal egress (corporate VPN/proxy ranges) - a known corporate exit node flagged as "
             "'anonymous' is a common benign cause; an unfamiliar residential/hosting IP in a country the user has never traveled to is not."
         ),
+        "reference_links": [
+            {"label": "Microsoft: Investigate risk with Entra ID Protection",
+             "url": "https://learn.microsoft.com/en-us/entra/id-protection/howto-identity-protection-investigate-risk"},
+        ],
         "description_sections": {
             "executive_summary": "The SOC detected a sign-in flagged as risky by the identity provider's risk engine, potentially indicating account compromise. The activity was investigated to determine whether the account was accessed by an unauthorized party.",
             "findings": [
@@ -404,15 +478,43 @@ RULE_BOOK: dict[str, dict] = {
             "logic": "5+ MFA push notifications to the same user within a short window without a corresponding single legitimate login attempt.",
             "confidence_guidance": "Confidence rises sharply with prompt count and falls if multiple legitimate devices/sessions explain the volume (check device count first).",
         },
+        # Adapted from the team's real SOP-02 (MFA Abuse/Bypass/Spamming)
+        # document - authentic index/field names, trimmed from the SOP's
+        # full coalesce chains.
         "splunk_queries": [
-            {"name": "Find the push-spam pattern", "query": "index=pingid eventtype=push | stats count by user | where count > 5"},
-            {"name": "Check the originating credential-entry event", "query": "index=auth user=<user> earliest=-1h | sort -_time"},
-            {"name": "Check if the same source IP hit other accounts", "query": "index=pingid src_ip=<ip> | stats dc(user) by src_ip"},
+            {"name": "MFA timeline for this user (SOP-02 L1)", "query": (
+                "(index=cia-sso-prod OR index=office365 OR index=azure_security) earliest=-24h latest=now\n"
+                "(user=\"<user>\" OR username=\"<user>\")\n"
+                "(mfa_result=* OR mfa_status=* OR factor=* OR action=*mfa* OR action=*approve* OR action=*deny*)\n"
+                "| eval mfa=coalesce(mfa_result, mfa_status, factor_result, authentication_result, result, status)\n"
+                "| eval method=coalesce(factor, authentication_method, mfa_factor)\n"
+                "| table _time user src_ip country asn app action result mfa method device\n"
+                "| sort _time"
+            )},
+            {"name": "Approval after repeated denials - the key escalation signal (SOP-02 L1)", "query": (
+                "(index=cia-sso-prod OR index=office365 OR index=azure_security) earliest=-24h latest=now\n"
+                "(\"PingID\" OR \"MFA\" OR \"multi-factor\" OR \"HDDT\")\n"
+                "(user=\"<user>\" OR src_user=\"<user>\" OR UserPrincipalName=\"<user>\")\n"
+                "| eval result_lower=lower(coalesce(mfa_result, result, status, \"\"))\n"
+                "| eval mfa_final_result=case(\n"
+                "    match(result_lower,\"approved|approve|success|accepted|allow\"), \"Approved\",\n"
+                "    match(result_lower,\"denied|deny|rejected|declined\"), \"Denied\",\n"
+                "    match(result_lower,\"fail|failed|error|timeout\"), \"Failed\",\n"
+                "    true(), \"Unknown\")\n"
+                "| sort 0 _time\n"
+                "| streamstats count(eval(mfa_final_result=\"Denied\")) as denials_before_this_event by user\n"
+                "| where mfa_final_result=\"Approved\" AND denials_before_this_event>=2"
+            )},
+            {"name": "Check if the same source IP hit other accounts", "query": "index=cia-sso-prod src_ip=\"<ip>\" | stats dc(user) by src_ip"},
         ],
         "ip_check_guide": (
             "Check the source IP generating the pushes via the Investigate tab. If it also appears against other "
             "accounts in the same window, this is part of a wider credential-stuffing campaign, not an isolated incident."
         ),
+        "reference_links": [
+            {"label": "Microsoft: Defend your users from MFA fatigue attacks",
+             "url": "https://techcommunity.microsoft.com/blog/microsoft-entra-blog/defend-your-users-from-mfa-fatigue-attacks/2365677"},
+        ],
         "description_sections": {
             "executive_summary": "The SOC detected an unusual volume of MFA push notifications sent to a user who did not initiate them, consistent with an MFA fatigue attack. The activity was investigated to determine whether the user approved any prompt.",
             "findings": [
@@ -953,5 +1055,6 @@ async def seed_rule_book(db: TrackerDB) -> None:
                 "ip_check_guide": rule.get("ip_check_guide", ""),
                 "description_sections": rule.get("description_sections", {}),
                 "alert_description": rule.get("description", ""),
+                "reference_links": rule.get("reference_links", []),
             }
             await db.upsert_sop(alert_type, rule["steps"], category=rule["category"], structured=structured)

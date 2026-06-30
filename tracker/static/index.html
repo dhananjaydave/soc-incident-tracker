@@ -186,6 +186,8 @@
   .rule-detail .cat-badge { font-family: var(--mono); font-size: 0.7rem; color: var(--info); background: rgba(56,189,248,0.1); padding: 0.15rem 0.5rem; border-radius: 100px; display: inline-block; margin-bottom: 0.6rem; }
   .rule-detail h4 { font-size: 0.74rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--accent); margin: 0.9rem 0 0.35rem; }
   .rule-detail h4:first-of-type { margin-top: 0; }
+  .rule-detail a { color: var(--info); font-size: 0.85rem; }
+  .rule-detail a:hover { color: var(--accent); }
   .rule-detail ul { margin: 0; padding-left: 1.2rem; }
   .rule-detail li { margin-bottom: 0.25rem; }
   .rule-detail .splunk-box { font-family: var(--mono); font-size: 0.78rem; background: #050810; border: 1px solid var(--border); border-radius: 6px; padding: 0.5rem 0.7rem; overflow-x: auto; }
@@ -1062,6 +1064,17 @@
         const h4 = document.createElement('h4'); h4.textContent = 'How to check the IP for this alert';
         const p = document.createElement('p'); p.style.margin = '0'; p.textContent = s.ip_check_guide;
         container.appendChild(h4); container.appendChild(p);
+      }
+      if (s.reference_links && s.reference_links.length) {
+        const h4 = document.createElement('h4'); h4.textContent = 'Further reading';
+        container.appendChild(h4);
+        for (const ref of s.reference_links) {
+          const p = document.createElement('p'); p.style.margin = '0 0 0.3rem';
+          const a = document.createElement('a'); a.href = ref.url; a.target = '_blank'; a.rel = 'noopener noreferrer';
+          a.textContent = ref.label;
+          p.appendChild(a);
+          container.appendChild(p);
+        }
       }
       appendListSection(container, 'Containment actions', s.containment_actions);
       appendListSection(container, 'Closure checklist', s.closure_checklist);
