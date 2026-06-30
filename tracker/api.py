@@ -25,7 +25,7 @@ from .investigation_score import compute_investigation_score
 from .mitre_knowledge import get_technique, list_techniques, search_techniques
 from .notifications import notify
 from .pdf_export import build_incidents_pdf
-from .rule_book import CONFIDENCE_SCALE, SOP_CATEGORIES, SUSPICIOUS_IP_GUIDE, seed_rule_book
+from .rule_book import CONFIDENCE_SCALE, DISPOSITION_DEFINITIONS, SOP_CATEGORIES, SUSPICIOUS_IP_GUIDE, seed_rule_book
 from .rule_catalog import RULE_CATALOG
 from .rule_catalog import SOP_CATEGORIES as RULE_CATALOG_SOP_CATEGORIES
 from .rule_catalog import guess_sop_from_title, lookup_catalog_entry
@@ -301,7 +301,10 @@ async def set_confidence(incident_id: int, body: ConfidenceRequest, _user: str =
 
 @app.get("/api/disposition-options")
 async def disposition_options(_user: str = Depends(require_auth)):
-    return {"verdicts": list(VALID_DISPOSITION_VERDICTS), "detection_quality": list(VALID_DETECTION_QUALITY)}
+    return {
+        "verdicts": list(VALID_DISPOSITION_VERDICTS), "detection_quality": list(VALID_DETECTION_QUALITY),
+        "verdict_definitions": DISPOSITION_DEFINITIONS,
+    }
 
 
 @app.post("/api/incidents/{incident_id}/disposition")

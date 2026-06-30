@@ -43,6 +43,18 @@ CONFIDENCE_SCALE: list[dict[str, str]] = [
     {"range": "Below 50%", "meaning": "Possible false positive"},
 ]
 
+# The disposition_verdict enum's full definitions (db.py:VALID_DISPOSITION_VERDICTS
+# holds just the 5 values for validation; the prose definitions live here
+# since they're reference/display content, not a validation concern) -
+# verbatim from the team's real Tines case-note template.
+DISPOSITION_DEFINITIONS: dict[str, str] = {
+    "Malicious": "Adversarial intent confirmed or strongly indicated.",
+    "Unresolved-suspicious": "Risk indicators present. Intent unestablished. Treated defensively.",
+    "Policy violation": "Legitimate actor, real activity, breaks policy. No approval on file.",
+    "Authorized": "Legitimate activity with durable evidence of pre-approval. Requires Evidence Reference.",
+    "Benign-other": "Legitimate. No approval needed. Normal business, source misconfiguration, or non-security testing.",
+}
+
 # A cross-cutting reference for assessing ANY IP encountered during
 # triage, regardless of which rule fired - the worked "Suspicious IP"
 # example the user gave, generalized. Alert-specific rules below also

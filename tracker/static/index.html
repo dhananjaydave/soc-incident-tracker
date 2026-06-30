@@ -248,6 +248,7 @@
       <button class="tab-btn" data-tab="knowledge">MITRE Knowledge</button>
       <button class="tab-btn" data-tab="feed">Security Feed</button>
       <button class="tab-btn" data-tab="users">User History</button>
+      <button class="tab-btn" data-tab="triage-builder">Triage Builder</button>
       <button class="tab-btn" data-tab="settings">Settings</button>
     </div>
 
@@ -551,6 +552,106 @@
           <button type="submit">Analyze</button>
         </form>
         <div id="file-result"></div>
+      </div>
+    </div>
+
+    <div class="tab-content" id="tab-triage-builder">
+      <div class="panel">
+        <h2>Triage Builder</h2>
+        <p class="lede" style="margin-bottom:1rem;">Fill in what you know field by field and it assembles the exact WHAT/WHERE/WHO/INVESTIGATION/FINDINGS/ACTION/DISPOSITION/NOTES write-up your team uses, then offers to create the ticket from it. Everything stays on this server - nothing here is sent to any external service.</p>
+        <form id="tb-form">
+          <div class="field-grid">
+            <div><label>Alert type (Rule Book)</label><select id="tb-alert-type" required></select></div>
+            <div><label>Title</label><input id="tb-title" required></div>
+          </div>
+          <div class="field-grid">
+            <div><label>WHAT: rule name (real Splunk title if known)</label>
+              <input id="tb-rule-name" list="create-title-suggestions" placeholder="e.g. Access - Gap-GP-VPN Password Spraying Attempts - Rule">
+            </div>
+            <div><label>WHAT: reason it triggered</label><input id="tb-reason" placeholder="e.g. 5 failed logins from same IP across 8 accounts in 10 min"></div>
+          </div>
+          <div class="field-grid">
+            <div><label>WHAT: time window reviewed</label><input id="tb-time-window" placeholder="e.g. 2026-06-30 08:00 to 09:00"></div>
+            <div><label>WHERE: detection tool</label><input id="tb-tool" placeholder="e.g. CrowdStrike / Microsoft Defender / PingID / Splunk ES"></div>
+          </div>
+          <div class="field-grid">
+            <div><label>Affected user (WHERE + WHO)</label><input id="tb-user" placeholder="jane.smith@company.com"></div>
+            <div><label>WHERE: host</label><input id="tb-host"></div>
+          </div>
+          <div class="field-grid">
+            <div><label>WHERE: source IP</label><input id="tb-source-ip"></div>
+            <div><label>WHO: department</label><input id="tb-department"></div>
+          </div>
+          <div class="field-grid">
+            <div><label>WHO: asset criticality</label>
+              <select id="tb-asset-criticality">
+                <option value="">(not set)</option>
+                <option value="Critical">Critical</option>
+                <option value="High">High</option>
+                <option value="Medium">Medium</option>
+                <option value="Low">Low</option>
+              </select>
+            </div>
+            <div><label>WHO: account status</label>
+              <select id="tb-account-status">
+                <option value="">(not set)</option>
+                <option value="Active">Active</option>
+                <option value="Disabled">Disabled</option>
+                <option value="Locked">Locked</option>
+                <option value="Service Account">Service Account</option>
+              </select>
+            </div>
+          </div>
+          <label>INVESTIGATION</label>
+          <textarea id="tb-investigation" style="min-height:50px;">Reviewed logs, related activity, historical events, and user behavior.</textarea>
+          <label>FINDINGS</label>
+          <textarea id="tb-findings" style="min-height:60px;" placeholder="Short summary of what you found"></textarea>
+          <label>ACTION</label>
+          <textarea id="tb-action" style="min-height:50px;" placeholder="What was done or is recommended"></textarea>
+          <div class="disposition-box">
+            <label style="margin:0 0 0.5rem; display:block;">DISPOSITION - the verdict that matters most for reporting</label>
+            <div class="field-grid">
+              <div><label>Verdict</label>
+                <select id="tb-disposition-verdict"><option value="">(not yet determined)</option></select>
+              </div>
+              <div><label>Detection quality</label>
+                <select id="tb-detection-quality"><option value="">(not set)</option></select>
+              </div>
+            </div>
+            <div class="field-grid">
+              <div><label>Activity occurred?</label>
+                <select id="tb-activity-occurred">
+                  <option value="">(not set)</option>
+                  <option value="true">Yes - confirmed</option>
+                  <option value="false">No - did not occur</option>
+                </select>
+              </div>
+              <div id="tb-evidence-reference-wrap" style="display:none;">
+                <label>Evidence reference (required for Authorized)</label>
+                <input id="tb-evidence-reference" placeholder="SNow/Jira ticket # or approval link">
+              </div>
+            </div>
+          </div>
+          <label>NOTES</label>
+          <textarea id="tb-notes" style="min-height:50px;" placeholder="Any additional points"></textarea>
+          <div class="field-grid">
+            <div><label>Priority for the ticket</label>
+              <select id="tb-priority">
+                <option value="low">Low</option>
+                <option value="medium" selected>Medium</option>
+                <option value="high">High</option>
+              </select>
+            </div>
+          </div>
+          <div class="action-row">
+            <button type="button" id="tb-generate-btn">Generate write-up</button>
+          </div>
+        </form>
+        <textarea id="tb-output" style="display:none; min-height:280px; margin-top:0.8rem;" readonly></textarea>
+        <div class="action-row" id="tb-output-actions" style="display:none; margin-top:0.6rem;">
+          <button class="secondary ghost" id="tb-copy-btn">Copy to clipboard</button>
+          <button id="tb-create-ticket-btn">Create ticket from this</button>
+        </div>
       </div>
     </div>
 
@@ -872,19 +973,129 @@
     }
   }
 
+  let dispositionVerdictDefinitions = {};
+
   async function loadDispositionOptions() {
     const options = await api('/api/disposition-options');
-    const verdictSelect = document.getElementById('detail-disposition-verdict');
-    for (const v of options.verdicts) {
-      const opt = document.createElement('option'); opt.value = v; opt.textContent = v;
-      verdictSelect.appendChild(opt);
+    dispositionVerdictDefinitions = options.verdict_definitions || {};
+    for (const selectId of ['detail-disposition-verdict', 'tb-disposition-verdict']) {
+      const verdictSelect = document.getElementById(selectId);
+      for (const v of options.verdicts) {
+        const opt = document.createElement('option'); opt.value = v; opt.textContent = v;
+        verdictSelect.appendChild(opt);
+      }
     }
-    const qualitySelect = document.getElementById('detail-detection-quality');
-    for (const q of options.detection_quality) {
-      const opt = document.createElement('option'); opt.value = q; opt.textContent = q;
-      qualitySelect.appendChild(opt);
+    for (const selectId of ['detail-detection-quality', 'tb-detection-quality']) {
+      const qualitySelect = document.getElementById(selectId);
+      for (const q of options.detection_quality) {
+        const opt = document.createElement('option'); opt.value = q; opt.textContent = q;
+        qualitySelect.appendChild(opt);
+      }
     }
   }
+
+  document.getElementById('tb-disposition-verdict').addEventListener('change', (e) => {
+    document.getElementById('tb-evidence-reference-wrap').style.display = e.target.value === 'Authorized' ? 'block' : 'none';
+  });
+
+  // --- Triage Builder ---
+  async function loadTriageBuilderAlertTypes() {
+    const select = document.getElementById('tb-alert-type');
+    clearChildren(select);
+    for (const sop of sopCache) {
+      const opt = document.createElement('option');
+      opt.value = sop.alert_type;
+      opt.textContent = sop.alert_type;
+      select.appendChild(opt);
+    }
+  }
+
+  function buildTriageWriteup() {
+    const v = (id) => document.getElementById(id).value.trim();
+    const user = v('tb-user') || '(unknown - please provide)';
+    const verdict = v('tb-disposition-verdict');
+    const verdictLine = verdict
+      ? `${verdict} - ${dispositionVerdictDefinitions[verdict] || ''}`
+      : '(not yet determined)';
+    const lines = [
+      `WHAT: Alert triggered for ${v('tb-rule-name') || v('tb-title') || '(unknown - please provide)'} due to ${v('tb-reason') || '(unknown - please provide)'}. Reviewed during ${v('tb-time-window') || '(unknown - please provide)'}.`,
+      '',
+      `WHERE: Detected in ${v('tb-tool') || '(unknown - please provide)'}. Rule: ${v('tb-rule-name') || '(unknown - please provide)'}. Affected user: ${user}, host: ${v('tb-host') || '(unknown - please provide)'}, source IP: ${v('tb-source-ip') || '(unknown - please provide)'}.`,
+      '',
+      `WHO: ${user} from ${v('tb-department') || '(unknown - please provide)'}. Asset criticality: ${v('tb-asset-criticality') || '(unknown - please provide)'}. Account status: ${v('tb-account-status') || '(unknown - please provide)'}.`,
+      '',
+      `INVESTIGATION: ${v('tb-investigation') || '(unknown - please provide)'}`,
+      '',
+      `FINDINGS: ${v('tb-findings') || '(unknown - please provide)'}`,
+      '',
+      `ACTION: ${v('tb-action') || '(unknown - please provide)'}`,
+      '',
+      `DISPOSITION: ${verdictLine}`,
+      '',
+      `NOTES: ${v('tb-notes') || '(none)'}`,
+    ];
+    return lines.join('\n');
+  }
+
+  document.getElementById('tb-generate-btn').addEventListener('click', () => {
+    const verdict = document.getElementById('tb-disposition-verdict').value;
+    if (verdict === 'Authorized' && !document.getElementById('tb-evidence-reference').value.trim()) {
+      showToast("Disposition 'Authorized' requires an evidence reference.", true);
+      return;
+    }
+    const output = document.getElementById('tb-output');
+    output.value = buildTriageWriteup();
+    output.style.display = 'block';
+    document.getElementById('tb-output-actions').style.display = 'flex';
+  });
+
+  document.getElementById('tb-copy-btn').addEventListener('click', async () => {
+    const textarea = document.getElementById('tb-output');
+    try {
+      await navigator.clipboard.writeText(textarea.value);
+      showToast('Copied to clipboard.', false);
+    } catch (err) {
+      textarea.select();
+      showToast('Could not access clipboard - text is selected, copy manually (Ctrl+C).', true);
+    }
+  });
+
+  document.getElementById('tb-create-ticket-btn').addEventListener('click', async () => {
+    const alertType = document.getElementById('tb-alert-type').value;
+    const title = document.getElementById('tb-title').value.trim();
+    if (!alertType || !title) {
+      showToast('Alert type and title are required to create a ticket.', true);
+      return;
+    }
+    try {
+      const created = await api('/api/incidents', {
+        method: 'POST',
+        body: JSON.stringify({
+          alert_type: alertType, title, description: document.getElementById('tb-output').value,
+          affected_user: document.getElementById('tb-user').value.trim() || null,
+          priority: document.getElementById('tb-priority').value,
+        }),
+      });
+      const incidentId = created.incident.id;
+      const verdict = document.getElementById('tb-disposition-verdict').value;
+      const detectionQuality = document.getElementById('tb-detection-quality').value;
+      const activityRaw = document.getElementById('tb-activity-occurred').value;
+      if (verdict && detectionQuality && activityRaw !== '') {
+        await api(`/api/incidents/${incidentId}/disposition`, {
+          method: 'POST',
+          body: JSON.stringify({
+            verdict, detection_quality: detectionQuality, activity_occurred: activityRaw === 'true',
+            evidence_reference: document.getElementById('tb-evidence-reference').value.trim() || null,
+          }),
+        });
+      }
+      showToast(`Ticket #${incidentId} created from Triage Builder.`, false);
+      await loadTickets(currentFilter);
+      await loadSummary();
+    } catch (err) {
+      showToast(err.message, true);
+    }
+  });
 
   function toggleEvidenceReferenceVisibility() {
     const verdict = document.getElementById('detail-disposition-verdict').value;
@@ -942,6 +1153,7 @@
       sopList.appendChild(li);
     }
     updateCreateRulePreview();
+    loadTriageBuilderAlertTypes();
   }
 
   async function updateCreateRulePreview() {

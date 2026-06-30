@@ -319,6 +319,14 @@ def test_disposition_options_returns_five_verdicts(client):
     assert "Malicious" in resp.json()["verdicts"]
 
 
+def test_disposition_options_includes_verdict_definitions(client):
+    _login(client)
+    resp = client.get("/api/disposition-options")
+    definitions = resp.json()["verdict_definitions"]
+    assert set(definitions.keys()) == set(resp.json()["verdicts"])
+    assert "Adversarial intent" in definitions["Malicious"]
+
+
 def test_set_disposition_requires_auth(client):
     resp = client.post("/api/incidents/1/disposition", json={
         "verdict": "Malicious", "activity_occurred": True, "detection_quality": "Working",
