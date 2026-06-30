@@ -350,15 +350,37 @@ def _get_disposition_history_sync(db_path: str, alert_type: str) -> dict:
         conn.close()
 
 
-def _get_similar_incidents_sync(db_path: str, alert_type: str, exclude_id: int, limit: int) -> list[dict]:
+def _get_similar_incidents_sync(db_path: str, alert_type: str, exclude_id: int | None, limit: int) -> list[dict]:
+    conn = _connect(db_path)
+    try:
+        if exclude_id is None:
+            rows = conn.execute(
+                "SELECT * FROM incidents WHERE alert_type = ? COLLATE NOCASE "
+                "ORDER BY created_at DESC LIMIT ?",
+                (alert_type, limit),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT * FROM incidents WHERE alert_type = ? COLLATE NOCASE AND id != ? "
+                "ORDER BY created_at DESC LIMIT ?",
+                (alert_type, exclude_id, limit),
+            ).fetchall()
+        return [_row_to_incident(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def _get_detection_quality_history_sync(db_path: str, alert_type: str) -> dict:
     conn = _connect(db_path)
     try:
         rows = conn.execute(
-            "SELECT * FROM incidents WHERE alert_type = ? COLLATE NOCASE AND id != ? "
-            "ORDER BY created_at DESC LIMIT ?",
-            (alert_type, exclude_id, limit),
+            "SELECT detection_quality, COUNT(*) as count FROM incidents "
+            "WHERE alert_type = ? COLLATE NOCASE AND detection_quality IS NOT NULL "
+            "GROUP BY detection_quality",
+            (alert_type,),
         ).fetchall()
-        return [_row_to_incident(r) for r in rows]
+        by_quality = {row["detection_quality"]: row["count"] for row in rows}
+        return {"by_quality": by_quality, "total": sum(by_quality.values())}
     finally:
         conn.close()
 
@@ -535,8 +557,11 @@ class TrackerDB:
     async def get_disposition_history(self, alert_type: str) -> dict:
         return await asyncio.to_thread(_get_disposition_history_sync, self.db_path, alert_type)
 
-    async def get_similar_incidents(self, alert_type: str, exclude_id: int, limit: int = 3) -> list[dict]:
+    async def get_similar_incidents(self, alert_type: str, exclude_id: int | None = None, limit: int = 3) -> list[dict]:
         return await asyncio.to_thread(_get_similar_incidents_sync, self.db_path, alert_type, exclude_id, limit)
+
+    async def get_detection_quality_history(self, alert_type: str) -> dict:
+        return await asyncio.to_thread(_get_detection_quality_history_sync, self.db_path, alert_type)
 
     async def export_incidents_csv(self) -> str:
         return await asyncio.to_thread(_export_incidents_csv_sync, self.db_path)

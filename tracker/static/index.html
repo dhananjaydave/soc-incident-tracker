@@ -298,6 +298,14 @@
             <button type="submit">Create ticket</button>
           </form>
           <div id="create-disposition-history" style="display:none; font-size:0.85rem; color:var(--text-dim); margin:0.6rem 0;"></div>
+          <div id="create-detection-quality-warning" style="display:none; font-size:0.85rem; color:var(--suspicious); margin:0.6rem 0;"></div>
+          <div id="create-similar-incidents" style="display:none; margin:0.6rem 0;">
+            <label>Similar past incidents (same alert type)</label>
+            <div id="create-similar-incidents-list"></div>
+          </div>
+          <div id="create-confidence-scale" class="rule-detail" style="margin-top:0.6rem;">
+            <h4>Confidence scale (reference)</h4>
+          </div>
           <div id="create-rule-preview"></div>
         </div>
 
@@ -661,7 +669,7 @@
     // with no visible error.
     const results = await Promise.allSettled([
       loadRuleBookCategories(), loadSops(), loadTickets(''), loadSummary(), loadMitreList(), loadDetectionGap(),
-      loadInvestigateReferences(), loadDispositionOptions(), loadRuleCatalog(),
+      loadInvestigateReferences(), loadDispositionOptions(), loadRuleCatalog(), loadConfidenceScaleReference(),
     ]);
     results.forEach((r, i) => { if (r.status === 'rejected') console.error('Dashboard panel', i, 'failed to load:', r.reason); });
   }
@@ -853,6 +861,17 @@
     return ruleCatalogCache.find(e => e.title === title) || null;
   }
 
+  async function loadConfidenceScaleReference() {
+    const scale = await api('/api/rule-book/confidence-scale');
+    const box = document.getElementById('create-confidence-scale');
+    for (const band of scale) {
+      const row = document.createElement('div');
+      row.style.fontSize = '0.82rem'; row.style.color = 'var(--text-dim)'; row.style.margin = '0.2rem 0';
+      row.textContent = `${band.range}: ${band.meaning}`;
+      box.appendChild(row);
+    }
+  }
+
   async function loadDispositionOptions() {
     const options = await api('/api/disposition-options');
     const verdictSelect = document.getElementById('detail-disposition-verdict');
@@ -954,7 +973,14 @@
     }
 
     const historyBox = document.getElementById('create-disposition-history');
-    if (!alertType) { historyBox.style.display = 'none'; return; }
+    const qualityBox = document.getElementById('create-detection-quality-warning');
+    const similarBox = document.getElementById('create-similar-incidents');
+    if (!alertType) {
+      historyBox.style.display = 'none';
+      qualityBox.style.display = 'none';
+      similarBox.style.display = 'none';
+      return;
+    }
     try {
       const dh = await api(`/api/disposition-history?alert_type=${encodeURIComponent(alertType)}`);
       if (dh.total > 0) {
@@ -968,6 +994,42 @@
       }
     } catch (err) {
       historyBox.style.display = 'none';
+    }
+
+    try {
+      const qh = await api(`/api/detection-quality-history?alert_type=${encodeURIComponent(alertType)}`);
+      const flagged = Object.entries(qh.by_quality || {}).filter(([q]) => q !== 'Working');
+      const flaggedCount = flagged.reduce((sum, [, count]) => sum + count, 0);
+      if (flaggedCount > 0) {
+        qualityBox.style.display = 'block';
+        const summary = flagged.map(([q, count]) => `'${q}' ${count}x`).join(', ');
+        qualityBox.textContent = `Heads up: this rule has been flagged ${summary} of ${qh.total} closed time(s) before - consider whether it needs tuning.`;
+      } else {
+        qualityBox.style.display = 'none';
+      }
+    } catch (err) {
+      qualityBox.style.display = 'none';
+    }
+
+    try {
+      const similar = await api(`/api/similar-incidents?alert_type=${encodeURIComponent(alertType)}&limit=3`);
+      const listBox = document.getElementById('create-similar-incidents-list');
+      clearChildren(listBox);
+      if (similar.length) {
+        similarBox.style.display = 'block';
+        for (const s of similar) {
+          const item = document.createElement('div');
+          item.className = 'similar-incident-item';
+          const verdict = s.disposition_verdict ? ` [${s.disposition_verdict}]` : '';
+          item.textContent = `#${s.id} ${s.title} - ${s.status}${verdict}`;
+          item.addEventListener('click', () => showDetail(s.id));
+          listBox.appendChild(item);
+        }
+      } else {
+        similarBox.style.display = 'none';
+      }
+    } catch (err) {
+      similarBox.style.display = 'none';
     }
   }
 

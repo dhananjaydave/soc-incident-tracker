@@ -178,6 +178,44 @@ async def test_set_disposition_on_missing_incident_returns_false(db):
     assert result is False
 
 
+async def test_get_detection_quality_history_empty(db):
+    history = await db.get_detection_quality_history("Phishing")
+    assert history == {"by_quality": {}, "total": 0}
+
+
+async def test_get_detection_quality_history_counts_by_quality(db):
+    a = await db.create_incident("Phishing", "test a")
+    b = await db.create_incident("Phishing", "test b")
+    await db.set_disposition(a["id"], "Malicious", None, True, "Working")
+    await db.set_disposition(b["id"], "Benign-other", None, False, "Logic gap")
+    history = await db.get_detection_quality_history("Phishing")
+    assert history["by_quality"] == {"Working": 1, "Logic gap": 1}
+    assert history["total"] == 2
+
+
+async def test_get_detection_quality_history_ignores_other_alert_types(db):
+    a = await db.create_incident("Phishing", "test a")
+    await db.set_disposition(a["id"], "Malicious", None, True, "Working")
+    history = await db.get_detection_quality_history("Different Alert")
+    assert history["total"] == 0
+
+
+async def test_get_similar_incidents_without_exclude_id_includes_all(db):
+    a = await db.create_incident("Phishing", "test a")
+    b = await db.create_incident("Phishing", "test b")
+    similar = await db.get_similar_incidents("Phishing")
+    ids = {s["id"] for s in similar}
+    assert {a["id"], b["id"]} == ids
+
+
+async def test_get_similar_incidents_with_exclude_id_excludes_it(db):
+    a = await db.create_incident("Phishing", "test a")
+    b = await db.create_incident("Phishing", "test b")
+    similar = await db.get_similar_incidents("Phishing", exclude_id=a["id"])
+    ids = {s["id"] for s in similar}
+    assert ids == {b["id"]}
+
+
 async def test_get_nonexistent_incident_returns_none(db):
     assert await db.get_incident(99999) is None
 

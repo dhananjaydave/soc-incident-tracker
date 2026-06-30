@@ -435,6 +435,16 @@ async def disposition_history(alert_type: str, _user: str = Depends(require_auth
     return await db.get_disposition_history(alert_type)
 
 
+@app.get("/api/detection-quality-history")
+async def detection_quality_history(alert_type: str, _user: str = Depends(require_auth)):
+    return await db.get_detection_quality_history(alert_type)
+
+
+@app.get("/api/similar-incidents")
+async def similar_incidents_preview(alert_type: str, limit: int = 3, _user: str = Depends(require_auth)):
+    return await db.get_similar_incidents(alert_type, exclude_id=None, limit=limit)
+
+
 @app.get("/api/rule-catalog")
 async def rule_catalog(_user: str = Depends(require_auth)):
     return RULE_CATALOG

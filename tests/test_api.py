@@ -402,6 +402,36 @@ def test_rule_catalog_lookup_no_match(client):
     assert resp.json()["matched"] == "none"
 
 
+def test_detection_quality_history_requires_auth(client):
+    resp = client.get("/api/detection-quality-history", params={"alert_type": "Phishing"})
+    assert resp.status_code == 401
+
+
+def test_detection_quality_history_reflects_past_dispositions(client):
+    _login(client)
+    created = client.post("/api/incidents", json={"alert_type": "Phishing", "title": "test"}).json()["incident"]
+    client.post(f"/api/incidents/{created['id']}/disposition", json={
+        "verdict": "Malicious", "activity_occurred": True, "detection_quality": "Logic gap",
+    })
+    resp = client.get("/api/detection-quality-history", params={"alert_type": "Phishing"})
+    assert resp.status_code == 200
+    assert resp.json()["by_quality"]["Logic gap"] == 1
+
+
+def test_similar_incidents_preview_requires_auth(client):
+    resp = client.get("/api/similar-incidents", params={"alert_type": "Phishing"})
+    assert resp.status_code == 401
+
+
+def test_similar_incidents_preview_includes_all_without_exclusion(client):
+    _login(client)
+    created = client.post("/api/incidents", json={"alert_type": "Phishing", "title": "test"}).json()["incident"]
+    resp = client.get("/api/similar-incidents", params={"alert_type": "Phishing"})
+    assert resp.status_code == 200
+    ids = {i["id"] for i in resp.json()}
+    assert created["id"] in ids
+
+
 def test_create_incident_unknown_alert_type_has_no_sop(client):
     _login(client)
     resp = client.post("/api/incidents", json={"alert_type": "Totally Custom Type", "title": "test"})
