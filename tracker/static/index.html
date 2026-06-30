@@ -122,6 +122,11 @@
   .suggestion-item { display: flex; align-items: flex-start; gap: 0.5rem; font-size: 0.83rem; padding: 0.25rem 0; cursor: pointer; }
   .suggestion-item input { width: auto; margin: 0.2rem 0 0; accent-color: var(--accent); cursor: pointer; flex-shrink: 0; }
 
+  .query-card { margin: 0.5rem 0; }
+  .query-card-name { font-size: 0.78rem; color: var(--text-dim); margin-bottom: 0.25rem; display: flex; justify-content: space-between; align-items: center; gap: 0.5rem; }
+  .query-card-name button { padding: 0.1rem 0.5rem; font-size: 0.7rem; }
+  .query-box { font-family: var(--mono); font-size: 0.78rem; background: #050810; border: 1px solid var(--border); border-radius: 6px; padding: 0.5rem 0.7rem; overflow-x: auto; white-space: pre-wrap; word-break: break-all; }
+
   .mitre-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 0.8rem; }
   .mitre-card {
     background: #070a12; border: 1px solid var(--border); border-radius: 9px; padding: 0.9rem 1rem; cursor: pointer;
@@ -615,6 +620,12 @@
                 <option value="Service Account">Service Account</option>
               </select>
             </div>
+          </div>
+          <div class="suggestion-box" id="tb-evidence-queries" style="display:none;">
+            <div class="suggestion-box-header">
+              <span>Evidence search queries for this alert type - IP/user/host filled in from the fields above when known</span>
+            </div>
+            <div id="tb-evidence-queries-list"></div>
           </div>
           <label>INVESTIGATION</label>
           <textarea id="tb-investigation" style="min-height:50px;">Reviewed logs, related activity, historical events, and user behavior.</textarea>
@@ -1197,9 +1208,62 @@
     for (const category of ['investigation', 'findings', 'action', 'notes']) {
       tbRenderSuggestionCategory(category, lists[category]);
     }
+    tbRenderEvidenceQueries();
   }
 
   document.getElementById('tb-alert-type').addEventListener('change', updateTbSuggestions);
+
+  // --- Triage Builder: evidence search queries (IP/user/host auto-filled) ---
+  function tbSubstituteQueryPlaceholders(query) {
+    const ip = document.getElementById('tb-source-ip').value.trim();
+    const user = document.getElementById('tb-user').value.trim();
+    const host = document.getElementById('tb-host').value.trim();
+    let result = query;
+    if (ip) result = result.replace(/<ip>|<src_ip>/g, ip);
+    if (user) result = result.replace(/<username>|<user>/g, user);
+    if (host) result = result.replace(/<host>|<hostname>/g, host);
+    return result;
+  }
+
+  function tbRenderEvidenceQueries() {
+    const alertType = document.getElementById('tb-alert-type').value;
+    const sop = sopCache.find(s => s.alert_type === alertType);
+    const queries = (sop && sop.structured && sop.structured.splunk_queries) || [];
+    const wrap = document.getElementById('tb-evidence-queries');
+    const listBox = document.getElementById('tb-evidence-queries-list');
+    clearChildren(listBox);
+    if (!queries.length) { wrap.style.display = 'none'; return; }
+    wrap.style.display = 'block';
+    for (const q of queries) {
+      const substituted = tbSubstituteQueryPlaceholders(q.query);
+      const card = document.createElement('div');
+      card.className = 'query-card';
+      const nameRow = document.createElement('div');
+      nameRow.className = 'query-card-name';
+      const nameSpan = document.createElement('span');
+      nameSpan.textContent = q.name;
+      const copyBtn = document.createElement('button');
+      copyBtn.type = 'button'; copyBtn.className = 'secondary ghost'; copyBtn.textContent = 'Copy';
+      copyBtn.addEventListener('click', async () => {
+        try {
+          await navigator.clipboard.writeText(substituted);
+          showToast('Query copied.', false);
+        } catch (err) {
+          showToast('Could not access clipboard.', true);
+        }
+      });
+      nameRow.appendChild(nameSpan); nameRow.appendChild(copyBtn);
+      const box = document.createElement('div');
+      box.className = 'query-box';
+      box.textContent = substituted;
+      card.appendChild(nameRow); card.appendChild(box);
+      listBox.appendChild(card);
+    }
+  }
+
+  document.getElementById('tb-source-ip').addEventListener('input', tbRenderEvidenceQueries);
+  document.getElementById('tb-user').addEventListener('input', tbRenderEvidenceQueries);
+  document.getElementById('tb-host').addEventListener('input', tbRenderEvidenceQueries);
 
   function buildTriageWriteup() {
     const v = (id) => document.getElementById(id).value.trim();
