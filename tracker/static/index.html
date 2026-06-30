@@ -582,7 +582,8 @@
         <p class="lede" style="margin-bottom:1rem;">Fill in what you know field by field and it assembles the exact WHAT/WHERE/WHO/INVESTIGATION/FINDINGS/ACTION/DISPOSITION/NOTES write-up your team uses, then offers to create the ticket from it. Everything stays on this server - nothing here is sent to any external service.</p>
         <form id="tb-form">
           <div class="field-grid">
-            <div><label>Alert type (Rule Book)</label><select id="tb-alert-type" required></select></div>
+            <div><label>Alert type / category (free text - e.g. VPN Brute Force, Phishing, MFA Spamming)</label>
+              <input id="tb-alert-type" placeholder="e.g. VPN Brute Force Attempts"></div>
             <div><label>Title</label><input id="tb-title" required></div>
           </div>
           <div class="field-grid">
@@ -1138,17 +1139,41 @@
   });
 
   // --- Triage Builder ---
-  async function loadTriageBuilderAlertTypes() {
-    const select = document.getElementById('tb-alert-type');
-    clearChildren(select);
-    for (const sop of sopCache) {
-      const opt = document.createElement('option');
-      opt.value = sop.alert_type;
-      opt.textContent = sop.alert_type;
-      select.appendChild(opt);
+  // Maps from the real 77-title catalog's SOP numbers to the closest
+  // Rule Book entry (the 9 rich structured entries that drive suggestions/
+  // queries). When a real Splunk title is selected in the rule-name field,
+  // this mapping drives which Rule Book playbook shows its suggestions.
+  const CATALOG_SOP_TO_RB = {
+    'SOP-01': 'Password Spraying Attempts',
+    'SOP-02': 'PingID MFA Spamming',
+    'SOP-03': 'Azure Risky Sign-in',
+    'SOP-04': 'Defender High Alert',
+    'SOP-05': 'CrowdStrike High Alert',
+    'SOP-06': 'O365 Phishing Alert',
+    'SOP-07': 'DDoS Attack Detected',
+    'SOP-08': 'DDoS Attack Detected',
+    'SOP-09': 'DDoS Attack Detected',
+    'SOP-10': 'CrowdStrike High Alert',
+    'SOP-11': 'DDoS Attack Detected',
+    'SOP-12': 'CrowdStrike High Alert',
+  };
+
+  let tbLastDerivedAlertType = '';
+
+  function loadTriageBuilderAlertTypes() {
+    // Alert type is now a free-text input, not a select — nothing to populate here.
+    // Suggestions are driven by the rule-name field (tb-rule-name) via catalog lookup.
+  }
+
+  document.getElementById('tb-rule-name').addEventListener('input', (e) => {
+    const entry = lookupCatalogEntry(e.target.value.trim());
+    tbLastDerivedAlertType = entry ? (CATALOG_SOP_TO_RB[entry.sop] || null) : null;
+    if (entry && !document.getElementById('tb-alert-type').value.trim()) {
+      document.getElementById('tb-alert-type').value = entry.category;
     }
     updateTbSuggestions();
-  }
+    tbRenderEvidenceQueries();
+  });
 
   // --- Triage Builder: Rule Book suggested steps (investigation/findings/action/notes) ---
   let tbTickedSteps = { investigation: new Set(), findings: new Set(), action: new Set(), notes: new Set() };
@@ -1215,7 +1240,7 @@
   }
 
   function updateTbSuggestions() {
-    const alertType = document.getElementById('tb-alert-type').value;
+    const alertType = tbLastDerivedAlertType || '';
     const sop = sopCache.find(s => s.alert_type === alertType);
     const lists = tbSuggestionLists(sop);
     for (const category of ['investigation', 'findings', 'action', 'notes']) {
@@ -1239,7 +1264,7 @@
   }
 
   function tbRenderEvidenceQueries() {
-    const alertType = document.getElementById('tb-alert-type').value;
+    const alertType = tbLastDerivedAlertType || '';
     const sop = sopCache.find(s => s.alert_type === alertType);
     const queries = (sop && sop.structured && sop.structured.splunk_queries) || [];
     const wrap = document.getElementById('tb-evidence-queries');
@@ -1329,10 +1354,10 @@
   });
 
   document.getElementById('tb-create-ticket-btn').addEventListener('click', async () => {
-    const alertType = document.getElementById('tb-alert-type').value;
+    const alertType = document.getElementById('tb-alert-type').value.trim() || tbLastDerivedAlertType || 'Uncategorized';
     const title = document.getElementById('tb-title').value.trim();
-    if (!alertType || !title) {
-      showToast('Alert type and title are required to create a ticket.', true);
+    if (!title) {
+      showToast('Title is required to create a ticket.', true);
       return;
     }
     try {

@@ -1040,10 +1040,229 @@ def all_mapped_mitre_technique_ids() -> set[str]:
     return ids
 
 
+# Additional investigation content merged at seed time - appended to (not
+# replacing) each rule's existing structured dicts. Derived from: the
+# team's own real SOP-01/02/03 documents, Microsoft's official IR
+# playbooks (learn.microsoft.com/security/operations/incident-response-
+# playbooks), and general SOC analyst practice.
+# Language is intentionally analyst-register - specific, evidence-first,
+# no AI-cliche filler phrases like "it is important to note that."
+_ENRICHMENTS: dict[str, dict] = {
+    "GP-VPN Brute Force Attempts": {
+        "investigation_steps": [
+            "Map the full attack window: pull the earliest and latest failed-auth events to bound your time filter, then search specifically for any 'interrupted' sign-in (password correct, MFA challenged) within that window — an interrupted result means the attacker holds a valid credential even if 'success' is never logged.",
+            "Check Entra sign-in error codes for any accounts touched: 50072/50074 = MFA was prompted (attacker may have the password); 53003 = blocked by CA; 50055 = password expired. These codes tell you more than pass/fail alone.",
+            "Check the client_app field for legacy authentication protocols (SMTP, IMAP, POP3, Exchange ActiveSync) — legacy auth bypasses MFA entirely. A legacy-auth failure is still high urgency even without a success because the attacker is explicitly trying to bypass MFA.",
+            "Search the notable index for the same source IP against other alert types in the past 7 days — spray toolkits hit multiple targets in rotation. Multi-alert history from the same IP confirms an active campaign, not a one-off.",
+            "Confirm with the network team whether the attacking IP is a known shared corporate egress, partner gateway, or scanner range before recommending a block — blocking a shared egress IP affects all users behind it.",
+        ],
+        "findings_extra": [
+            "Attack window: [source IP] made [N] failed attempts against [M] account(s) from [start time] to [end time].",
+            "Source IP geolocation/ASN: [Country / hosting provider] — inconsistent with any known corporate user population.",
+            "No 'interrupted' sign-ins detected within the window — attacker does not appear to hold a valid credential at this time.",
+            "Legacy authentication protocols: [not observed / observed via client_app field — MFA bypass risk noted].",
+        ],
+        "actions_extra": [
+            "Block source IP at VPN gateway or perimeter firewall — confirm no corporate egress / partner IP overlap with network team before applying.",
+            "Force password reset for any account where sign-in result was 'interrupted' (password correct, MFA challenged) — attacker has the credential; reset is required regardless of whether authentication completed.",
+            "Enable Entra ID Smart Lockout and ADFS Extranet Lockout if not already active to limit attacker velocity on future attempts.",
+            "Tag source IP in SIEM and Defender for Cloud Apps to trigger alerts on any future appearance from same IP.",
+        ],
+        "false_positive_indicators_extra": [
+            "Automated provisioning tool or service account retrying with stale/rotated credentials — check the client user-agent string and whether the source IP matches known internal tooling.",
+            "VPN client auto-reconnect after token expiry: single account, failures at regular intervals, immediately followed by a success from the same IP. Benign pattern if the source is the corporate egress.",
+        ],
+    },
+    "Password Spraying Attempts": {
+        "investigation_steps": [
+            "Confirm the many-accounts/few-attempts pattern (spray) vs. many-attempts/one-account (brute force) — the distinction changes the scope query entirely. For spray, the key number is unique_users targeted; for brute force, it's attempt_count per user.",
+            "Search for any 'interrupted' sign-in (password correct, MFA challenged) across ALL targeted accounts in the spray window — even one interrupted sign-in on one account means the attacker found a valid password and requires immediate escalation.",
+            "Check sign-in error code 53003 (blocked by Conditional Access) for the targeted accounts — if CA fired, it likely stopped the attack but the accounts still had valid credentials tested. Document which accounts triggered CA.",
+            "Cross-reference the spray window against any known password breach data for this domain (Have I Been Pwned Enterprise, dark-web credential reports) — credential-stuffing sprays often immediately follow a breach publication.",
+            "Review the spray pattern for timing regularity — automated spray tools hit at uniform intervals (every 30s, every 60s); irregular gaps may indicate a manual or low-and-slow attempt designed to avoid lockout detection.",
+        ],
+        "findings_extra": [
+            "Password spray pattern confirmed: [source IP] targeted [N] unique accounts with approximately [M] attempts per account over [window].",
+            "No successful or interrupted authentications observed — attacker does not currently hold any confirmed valid credential.",
+            "Spray timing: [regular cadence of ~Ns intervals / irregular] — [consistent with automated tooling / may indicate manual or throttled spray].",
+        ],
+        "actions_extra": [
+            "Block source IP at perimeter if repeat spray activity expected — note that sophisticated spray campaigns rotate source IPs after detection; monitor for re-spray from new IP against the same accounts.",
+            "Notify affected account owners — many spray targets are unaware their account was targeted, and a heads-up improves reporting of future suspicious activity.",
+        ],
+        "false_positive_indicators_extra": [
+            "Pen test or red team exercise — confirm with security engineering before blocking or resetting credentials.",
+            "Single-sign-on misconfiguration re-trying valid credentials against a stale ADFS endpoint — check with the SIEM team if the source is an internal ADFS proxy.",
+        ],
+    },
+    "PingID MFA Spamming": {
+        "investigation_steps": [
+            "Confirm with the user directly by phone or Teams chat (NOT email — attacker may already have mailbox access) whether they approved any prompt, and whether they recall initiating any login around the alert time. A genuine user may have approved one prompt out of habit before realising something was wrong.",
+            "Pull the authentication method used for any approval event — number-matching MFA approval requires the user to actively enter a displayed code and is harder to coerce than a simple push tap. A number-match approval from an unusual location is still suspicious but changes the attack-vector assessment.",
+            "Identify WHERE the attacker obtained the valid password — pull this user's sign-in history for the past 30 days for any 'interrupted' events (password correct, MFA challenged), and check for any phishing email delivered to this user in the same period. MFA bombing only works with a valid credential; the credential source is a key evidence gap.",
+            "Check whether the same source IP appears in notables for other users in the past 72 hours — MFA bombing campaigns target multiple accounts simultaneously; a single-user event with no other activity may indicate targeted compromise rather than broad campaign.",
+            "Review the user's password last-changed date — MFA bombing attempts following a password that has not been changed in 6+ months and a recent breach disclosure affecting the organization are strongly correlated.",
+        ],
+        "findings_extra": [
+            "[N] MFA push prompts sent to [user] within [window] from source IP [IP] ([Country] / [ASN/hosting provider]).",
+            "No MFA prompt was approved [or: One prompt approved at [time] — post-authentication activity check required].",
+            "Attacker holds a valid password for this account — password reset is required regardless of whether any prompt was approved.",
+            "Source IP shows no prior association with legitimate sign-ins by this user.",
+        ],
+        "actions_extra": [
+            "Reset the user's password immediately — attacker holds valid credentials and the reset closes the door on further MFA bombing or password-based attacks.",
+            "If any prompt was approved: revoke all active sessions in Entra ID (Entra portal → User → Revoke sessions) and check mailbox for new inbox rules, forwarded messages, or external sharing events created after the approval timestamp.",
+            "Verify whether number matching is enforced for this user's Authenticator policy — if not, recommend enabling it as an immediate improvement to MFA bombing resilience.",
+        ],
+        "false_positive_indicators_extra": [
+            "User initiating a login from a new device while their existing session is also prompting a refresh — can produce a burst of push prompts that look like an attack but are entirely self-generated.",
+            "Session token expiry after a password change causing multiple apps to simultaneously re-authenticate — produces several push prompts in quick succession that look like a bombing event.",
+        ],
+    },
+    "Azure Risky Sign-in": {
+        "investigation_steps": [
+            "Pull the specific Entra ID Protection risk detection type (anonymous IP, impossible travel, leaked credentials, malicious IP, unfamiliar sign-in properties, token anomaly, etc.) — the detection type determines both urgency and what to investigate next. 'Leaked credentials' requires immediate password reset regardless of any other factor; 'impossible travel' should be verified directly with the user; 'anonymous IP' requires checking session downstream activity.",
+            "Review the Conditional Access evaluation outcome for the risky session — if CA applied a 'grant with MFA-required' grant and MFA completed, the session may be active and downstream access must be scoped. If CA blocked it, the session is almost certainly terminated; confirm and close if scope is clean.",
+            "Pull Entra audit logs for the 60 minutes immediately after the risky sign-in and filter specifically for: inbox rule creations (Set-InboxRule, New-InboxRule), application consent grants (Consent to application), device registrations (Add registered device), and password changes — these are the four most common post-compromise persistence actions taken within the first hour of account access.",
+            "Compare the risky sign-in source IP against the user's last 10 clean, successful sign-ins for baseline deviations: new country, new ASN, new device OS/browser, new user agent — the more deviations, the lower the likelihood this is the legitimate user.",
+            "Search Defender XDR for any correlated incident or linked alerts on the same user or same source IP — Defender often bundles a risky sign-in with endpoint detections or mailbox anomaly alerts into a single incident graph that gives a fuller picture than the Entra alert alone.",
+        ],
+        "findings_extra": [
+            "Risky sign-in detected: [risk detection type] for [user] from [IP] ([Country] / [ASN]) at [time]. Authentication result: [success/failure/interrupt].",
+            "Post-sign-in activity in 60-minute window: [no anomalous actions observed / inbox rules created at [time] / [N] new app consents / etc.].",
+            "User risk level in Entra ID Protection: [none/low/medium/high at time of investigation]. CA evaluation: [blocked / granted / not applied].",
+            "Baseline comparison: source IP/country/device [consistent with/deviates from] user's normal sign-in pattern.",
+        ],
+        "actions_extra": [
+            "Confirm or dismiss the Entra ID Protection risk event — confirming it feeds the risk engine and triggers CA remediation policies on future sign-ins from risky sessions.",
+            "Check and close any CA gaps for this user — verify that medium and high risk sign-ins are gated by MFA or blocked outright in the user's assigned policy.",
+        ],
+        "false_positive_indicators_extra": [
+            "User confirmed travelling to the flagged country — document the travel approval or Teams confirmation as evidence reference and close as Authorized.",
+            "Corporate VPN exit node in an unusual region (common for remote workers or remote-office VPN tunnels) — validate the exit IP is in the known-IPs allowlist; if it should be, create a Jira for SIEM team to add it.",
+        ],
+    },
+    "CrowdStrike High Alert": {
+        "investigation_steps": [
+            "Open the detection in Falcon and pull the full process tree — review the parent AND grandparent of the flagged process, not just the alert node. Attackers use legitimate Windows binaries (wscript.exe, mshta.exe, certutil.exe, regsvr32.exe, rundll32.exe) as launchers; the alert fires on the child or grandchild process, but the entry point is higher in the tree.",
+            "Note the MITRE ATT&CK technique CrowdStrike assigned to this detection and use it to direct the next check: T1059 (script execution) → look for payload drop path; T1055 (process injection) → identify which legitimate process was injected and what it did; T1543 (persistence) → look for registry key modifications or new service creation.",
+            "Check the host's sensor last-seen timestamp in Falcon — a host that stopped reporting within 30–60 minutes of the detection may indicate an adversary-initiated action (sensor disablement, host isolation, network cut) rather than normal remediation activity.",
+            "Search for the same SHA256 file hash across all Falcon-enrolled hosts: index=crowdstrike SHA256HashData=<hash> event_simpleName=ProcessRollup2 — if it's on more than one host, the scope is wider than an isolated endpoint event.",
+            "Pull NetworkConnectIP4 events from the flagged host for the 30 minutes following the detection — C2 callbacks, data staging, and lateral movement connection attempts almost always occur within this window post-execution.",
+        ],
+        "findings_extra": [
+            "CrowdStrike [High/Critical] detection on [host] for [detection name] — MITRE technique: [T-code / tactic]. Process: [process name] spawned by [parent process].",
+            "Hash [SHA256]: [observed on this host only / observed on N additional hosts — [list]].",
+            "Sensor status: [reporting normally / stopped reporting at [time] — investigate].",
+            "No outbound connections from host to non-corporate IPs in 30-minute post-detection window [or: Connection to [IP:port] at [time] — requires reputation check].",
+        ],
+        "actions_extra": [
+            "Contain the host in Falcon (network containment, not full isolation) if active malicious activity is confirmed — containment preserves forensic evidence access while cutting lateral movement paths.",
+            "Collect volatile evidence before reimaging: running process list, open network connections, event logs from the 2-hour window around the detection, and a copy of any file artifacts.",
+            "Route to PT-EDR Platform via ServiceNow for hash block, network containment, or Falcon platform support if containment is required.",
+        ],
+        "false_positive_indicators_extra": [
+            "Security tool or AV scanner performing legitimate binary analysis that triggers a behavioral detection — validate by checking the parent process and the tool's installed path.",
+            "IT administrator using a dual-use tool (PsExec, Mimikatz-style admin utility) for authorized maintenance — check the change management calendar and confirm with the system owner before closing.",
+        ],
+    },
+    "Defender High Alert": {
+        "investigation_steps": [
+            "Open the full Defender XDR incident, not just the individual alert — Defender correlates multiple signals (email delivery → endpoint execution → identity risk) into a single incident graph; review all entities and alerts in the incident, not only the one that triggered your ticket.",
+            "Check Automated Investigation and Remediation (AIR) status — Defender may have already quarantined a file, killed a process, or blocked a URL before you opened the ticket. Document what was auto-remediated so the incident report reflects it and to avoid double-action.",
+            "Review the Defender device timeline for the 2 hours before the alert trigger — look for: unusual PowerShell invocations, LOLBin usage (certutil, mshta, wscript, regsvr32, rundll32), net/whoami/ipconfig /all reconnaissance commands, or file drops in temp/AppData paths.",
+            "Confirm whether the affected device is a privileged endpoint (admin workstation, domain controller, CA server, jump host) — the same alert severity requires faster escalation and deeper review on privileged endpoints than on standard user workstations.",
+        ],
+        "findings_extra": [
+            "Defender [High/Critical] alert on [device] / [user] — alert title: [alert name]. AIR status: [auto-remediated / pending manual action].",
+            "Incident scope: [single alert / correlated multi-entity incident — [N] other alerts in the same Defender incident].",
+            "Device role: [standard user workstation / privileged endpoint — escalation threshold adjusted accordingly].",
+        ],
+        "actions_extra": [
+            "Isolate device in Defender portal if active threat is confirmed and host has not already been network-isolated by AIR.",
+            "Submit any quarantined file samples to your threat intel sandbox or Defender's Threat Intelligence portal for full behavioral detonation before reimaging.",
+        ],
+        "false_positive_indicators_extra": [
+            "Defender alerting on a security tool installed by IT (pen-test toolkits, AV comparative testing, SIEM agents with process injection capabilities) — validate against change management records.",
+            "LOLBin activity flagged during a legitimate OS patching or imaging job — check the device management console (Intune/SCCM) for scheduled tasks active at alert time.",
+        ],
+    },
+    "O365 Phishing Alert": {
+        "investigation_steps": [
+            "Confirm actual email delivery status in Exchange Admin Center or Defender's Message Trace before doing anything else — was it delivered to inbox, held in quarantine, or deleted before delivery? A quarantined message with no user click is a significantly lower urgency than a delivered-and-opened one.",
+            "Extract ALL URLs from the email body (not only the one that triggered the detection) — phishing kits embed decoy legitimate links alongside the malicious one specifically to confuse automated scanners. Submit each extracted URL individually to a sandbox or URL reputation service.",
+            "Check WHOIS registration age of the sender domain — domains registered within the last 30 days that pass SPF/DKIM/DMARC technical checks are almost exclusively attack infrastructure. A passing DMARC alone does not mean the sender is who they claim to be.",
+            "Pull the full recipient list for this message from the email gateway or Defender's Threat Explorer — phishing campaigns are rarely single-target. Find all recipients, prioritize any who clicked, and scope the breach before closing the ticket.",
+            "Check Teams workspace for the same URL or same sender domain — O365 phishing is increasingly delivered via Teams external-user messages and file sharing as email filtering has tightened. Teams links bypass most email gateway controls entirely.",
+        ],
+        "findings_extra": [
+            "Email [delivered to inbox / quarantined / blocked] — user [did / did not] interact with the message. [URL clicked at [time] / no URL click observed in URL click logs].",
+            "Sender domain [domain] registered [N] days ago — consistent with purpose-registered attack infrastructure (sub-30-day domain).",
+            "Technical authentication: SPF [pass/fail], DKIM [pass/fail/none], DMARC [pass/fail/none] — technical checks [do not / do] indicate spoofed organization.",
+            "Campaign scope: same message or tracked URL sent to [N] additional recipients in this tenant [or: no additional recipients confirmed].",
+        ],
+        "actions_extra": [
+            "Purge the message from all recipient inboxes using Defender's soft-delete or Search-UnifiedAuditLog plus Remove-ComplianceSearchAction — document purge completion in the ticket.",
+            "Block sender domain and all embedded URLs at the email gateway, proxy, and Defender Safe Links blocklist.",
+            "For any user who clicked the malicious URL: treat as potential credential entry — pull the URL destination content to confirm if it was a credential-harvesting page; if yes, initiate immediate password reset and MFA check.",
+        ],
+        "false_positive_indicators_extra": [
+            "Internal phishing simulation or security awareness training campaign — confirm with the security awareness team before blocking the sender or resetting credentials.",
+            "Marketing email from a recently-acquired or rebranded domain that hasn't been added to the allowlist — check with the business before blocking; newer corporate domains pass all technical checks and can trigger this alert.",
+        ],
+    },
+    "DDoS Attack Detected": {
+        "investigation_steps": [
+            "Classify the attack type before trying to mitigate — volumetric (bandwidth saturation), protocol (SYN/ICMP/UDP flood targeting state tables), or application-layer (HTTP flood, slow-loris targeting server thread pools). The response for each is different: volumetric requires upstream scrubbing or null-routing; protocol requires ACL or SYN-cookie tuning; application-layer requires WAF rate-limiting.",
+            "Establish a traffic baseline for the targeted destination(s) over the past 7 days before calling it DDoS — a 2–3× spike should be correlated against scheduled business events (marketing campaign launch, product release, planned external scan) before engaging mitigation. A 10× spike with no business event explanation is DDoS.",
+            "Determine whether the attack traffic has a discernible signature (source port, TTL, packet size, payload prefix) that enables upstream ACL filtering without null-routing — a signature-based ACL preserves partial service availability and gives you evidence to share with your upstream provider.",
+            "Identify whether the attack is targeting a single IP or distributed across a subnet — a distributed attack against a /24 may require upstream provider null-routing or a network provider's scrubbing center rather than perimeter-only filtering.",
+            "Check for concurrent suspicious activity (failed logins, new accounts created, admin console access attempts) during the DDoS window — DDoS is sometimes used as a distraction during a simultaneous intrusion attempt.",
+        ],
+        "findings_extra": [
+            "Attack confirmed: [volumetric / protocol / application-layer] DDoS targeting [destination IP / service]. Peak: [N Gbps / N Mpps / N req/s].",
+            "Business impact: service [degraded / fully unavailable] for [duration] since [start time]. [Service recovery confirmed at [time] / service remains impacted].",
+            "Attack signature: [source port, packet size, payload pattern if identified]. Upstream provider mitigation: [engaged / not required / pending].",
+            "No concurrent intrusion activity observed during attack window [or: concurrent suspicious access attempts noted — investigate separately].",
+        ],
+        "actions_extra": [
+            "Engage upstream ISP or CDN DDoS mitigation if on-premises scrubbing is insufficient for the observed traffic volume — include attack type, peak volume, and target IP in the provider request.",
+            "Apply perimeter ACL to drop signature-matching traffic — confirm with network team that the ACL pattern does not inadvertently affect legitimate traffic before applying.",
+        ],
+        "false_positive_indicators_extra": [
+            "Legitimate high-volume traffic event (major product launch, external scan audit, media coverage spike) — confirm with the business calendar and web analytics before engaging mitigation.",
+            "Monitoring tool or load-testing framework running against a pre-production environment that shares infrastructure — confirm with the dev/infra team before declaring DDoS.",
+        ],
+    },
+    "Major Incident": {
+        "investigation_steps": [
+            "Do not wait for certainty before containing — in a major incident, contain first and investigate in parallel. Delaying containment to gather more evidence typically results in wider blast radius.",
+            "Assign a single incident commander immediately and communicate the assignment to all responders — major incidents collapse into confusion when multiple people are making containment decisions independently without clear ownership.",
+            "Every containment action and its outcome must be logged in real time — major incident timelines are always reconstructed later for legal, compliance, or board review, and real-time notes are far more reliable than post-incident recall.",
+            "Scope first before public communications — determine what is confirmed vs. suspected and what data/systems are confirmed impacted before drafting any external-facing statement. Premature scope estimates in major incidents are almost always wrong and create additional reputational risk.",
+        ],
+        "findings_extra": [
+            "Incident scope as of [time]: [confirmed affected systems / suspected affected systems / data classification involved if known].",
+            "Containment status: [contained / partially contained / active spread ongoing].",
+            "Business impact: [services affected, estimated revenue/operational impact if known].",
+        ],
+        "actions_extra": [
+            "Notify legal and compliance immediately if data exfiltration is possible — breach notification timelines start from the point of discovery, not confirmation.",
+            "Preserve all evidence before containment actions where operationally feasible — memory dumps, network captures, log exports — the forensic record is required for post-incident review and may be legally required.",
+        ],
+        "false_positive_indicators_extra": [
+            "Cascading infrastructure failure (BGP mis-announcement, CDN outage, cloud provider incident) misclassified as security event — check provider status pages and network team before declaring major security incident.",
+        ],
+    },
+}
+
+
 async def seed_rule_book(db: TrackerDB) -> None:
     existing = {s["alert_type"] for s in await db.list_sops()}
     for alert_type, rule in RULE_BOOK.items():
         if alert_type not in existing:
+            enrichment = _ENRICHMENTS.get(alert_type, {})
+            base_sections = rule.get("description_sections", {})
             structured = {
                 **rule["structured"],
                 "common_titles": rule.get("common_titles", []),
@@ -1053,8 +1272,30 @@ async def seed_rule_book(db: TrackerDB) -> None:
                 "detection_engineering": rule.get("detection_engineering", {}),
                 "splunk_queries": rule.get("splunk_queries", []),
                 "ip_check_guide": rule.get("ip_check_guide", ""),
-                "description_sections": rule.get("description_sections", {}),
                 "alert_description": rule.get("description", ""),
                 "reference_links": rule.get("reference_links", []),
+                "investigation_steps": (
+                    rule["structured"].get("investigation_steps", []) +
+                    enrichment.get("investigation_steps", [])
+                ),
+                "containment_actions": (
+                    rule["structured"].get("containment_actions", []) +
+                    enrichment.get("actions_extra", [])
+                ),
+                "false_positive_indicators": (
+                    rule["structured"].get("false_positive_indicators", []) +
+                    enrichment.get("false_positive_indicators_extra", [])
+                ),
+                "description_sections": {
+                    **base_sections,
+                    "findings": (
+                        base_sections.get("findings", []) +
+                        enrichment.get("findings_extra", [])
+                    ),
+                    "actions_taken": (
+                        base_sections.get("actions_taken", []) +
+                        enrichment.get("actions_extra", [])
+                    ),
+                },
             }
             await db.upsert_sop(alert_type, rule["steps"], category=rule["category"], structured=structured)
