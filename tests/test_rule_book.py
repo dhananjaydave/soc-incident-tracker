@@ -23,7 +23,7 @@ def db():
 def test_eight_sop_categories_defined():
     assert len(SOP_CATEGORIES) == 8
     ids = {c["id"] for c in SOP_CATEGORIES}
-    assert ids == {"SOP-01", "SOP-02", "SOP-03", "SOP-04", "SOP-05", "SOP-06", "SOP-07", "SOP-08"}
+    assert ids == {"RB-01", "RB-02", "RB-03", "RB-04", "RB-05", "RB-06", "RB-07", "RB-08"}
 
 
 def test_nine_real_rules_defined():
@@ -109,7 +109,7 @@ async def test_seed_rule_book_populates_db(db):
 async def test_seed_rule_book_sets_category_and_structured(db):
     await seed_rule_book(db)
     sop = await db.get_sop("Azure Risky Sign-in")
-    assert sop["category"] == "SOP-03: Risky Sign-in / Identity Compromise"
+    assert sop["category"] == "RB-03: Risky Sign-in / Identity Compromise"
     assert "Entra ID" in sop["structured"]["investigation_steps"][0]
 
 
@@ -153,7 +153,7 @@ async def test_seed_rule_book_includes_ddos_rule(db):
     await seed_rule_book(db)
     sop = await db.get_sop("DDoS Attack Detected")
     assert sop is not None
-    assert sop["category"] == "SOP-07: DDoS / Availability"
+    assert sop["category"] == "RB-07: DDoS / Availability"
 
 
 def test_all_mapped_mitre_technique_ids_nonempty():

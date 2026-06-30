@@ -23,15 +23,27 @@ from __future__ import annotations
 
 from .db import TrackerDB
 
+# IDs deliberately use an "RB-" (Rule Book) prefix, not "SOP-" - these were
+# built early in the project, before any real SOP document existed, as
+# placeholder categories for the 9 hand-written playbooks below. Once the
+# user started sharing the team's REAL SOP documents (see
+# real_sop_reference.py), it turned out RB-01 through RB-06 happen to line
+# up conceptually with the real SOP-01..SOP-06, but RB-07 ("DDoS") and
+# RB-08 ("Major Incident") do NOT correspond to anything in the real
+# numbering (real SOP-07 is "Cloud Malware", SOP-08 is "Data Protection/
+# DLP") - these were previously labeled "SOP-07"/"SOP-08" and collided
+# with the real ones, showing contradictory info depending which feature
+# you looked at. Renamed to RB-* across the board so the two systems can
+# never collide as more real SOPs (up to SOP-13) are added.
 SOP_CATEGORIES: list[dict[str, str]] = [
-    {"id": "SOP-01", "name": "VPN / Authentication / Password Spraying"},
-    {"id": "SOP-02", "name": "MFA Abuse / MFA Bypass"},
-    {"id": "SOP-03", "name": "Risky Sign-in / Identity Compromise"},
-    {"id": "SOP-04", "name": "Microsoft Defender Investigation"},
-    {"id": "SOP-05", "name": "CrowdStrike / Endpoint Investigation"},
-    {"id": "SOP-06", "name": "Phishing / Email Investigation"},
-    {"id": "SOP-07", "name": "DDoS / Availability"},
-    {"id": "SOP-08", "name": "Major Incident / Crisis Response"},
+    {"id": "RB-01", "name": "VPN / Authentication / Password Spraying"},
+    {"id": "RB-02", "name": "MFA Abuse / MFA Bypass"},
+    {"id": "RB-03", "name": "Risky Sign-in / Identity Compromise"},
+    {"id": "RB-04", "name": "Microsoft Defender Investigation"},
+    {"id": "RB-05", "name": "CrowdStrike / Endpoint Investigation"},
+    {"id": "RB-06", "name": "Phishing / Email Investigation"},
+    {"id": "RB-07", "name": "DDoS / Availability"},
+    {"id": "RB-08", "name": "Major Incident / Crisis Response"},
 ]
 
 # Universal reference, not tied to one rule - how confidence percentages
@@ -75,7 +87,7 @@ SUSPICIOUS_IP_GUIDE: dict = {
 
 RULE_BOOK: dict[str, dict] = {
     "GP-VPN Brute Force Attempts": {
-        "category": "SOP-01: VPN / Authentication / Password Spraying",
+        "category": "RB-01: VPN / Authentication / Password Spraying",
         "common_titles": [
             "Multiple failed VPN login attempts detected",
             "VPN brute force from single source IP",
@@ -169,7 +181,7 @@ RULE_BOOK: dict[str, dict] = {
         },
     },
     "Password Spraying Attempts": {
-        "category": "SOP-01: VPN / Authentication / Password Spraying",
+        "category": "RB-01: VPN / Authentication / Password Spraying",
         "common_titles": [
             "Password spray detected across multiple accounts",
             "Low-volume credential spray attempt",
@@ -262,7 +274,7 @@ RULE_BOOK: dict[str, dict] = {
         },
     },
     "Azure Risky Sign-in": {
-        "category": "SOP-03: Risky Sign-in / Identity Compromise",
+        "category": "RB-03: Risky Sign-in / Identity Compromise",
         "common_titles": [
             "Impossible travel sign-in detected",
             "Sign-in from anonymous IP",
@@ -357,7 +369,7 @@ RULE_BOOK: dict[str, dict] = {
         },
     },
     "PingID MFA Spamming": {
-        "category": "SOP-02: MFA Abuse / MFA Bypass",
+        "category": "RB-02: MFA Abuse / MFA Bypass",
         "common_titles": [
             "Unusual volume of MFA push prompts",
             "Suspected MFA fatigue attack",
@@ -448,7 +460,7 @@ RULE_BOOK: dict[str, dict] = {
         },
     },
     "CrowdStrike High Alert": {
-        "category": "SOP-05: CrowdStrike / Endpoint Investigation",
+        "category": "RB-05: CrowdStrike / Endpoint Investigation",
         "common_titles": [
             "CrowdStrike high-severity detection",
             "Suspicious process behavior flagged by Falcon",
@@ -541,7 +553,7 @@ RULE_BOOK: dict[str, dict] = {
         },
     },
     "Defender High Alert": {
-        "category": "SOP-04: Microsoft Defender Investigation",
+        "category": "RB-04: Microsoft Defender Investigation",
         "common_titles": [
             "Microsoft Defender high-severity alert",
             "Suspicious activity flagged by Defender for Endpoint",
@@ -634,7 +646,7 @@ RULE_BOOK: dict[str, dict] = {
         },
     },
     "O365 Phishing Alert": {
-        "category": "SOP-06: Phishing / Email Investigation",
+        "category": "RB-06: Phishing / Email Investigation",
         "common_titles": [
             "User-reported phishing email",
             "Suspicious email with credential harvesting link",
@@ -728,7 +740,7 @@ RULE_BOOK: dict[str, dict] = {
         },
     },
     "DDoS Attack Detected": {
-        "category": "SOP-07: DDoS / Availability",
+        "category": "RB-07: DDoS / Availability",
         "common_titles": [
             "Volumetric DDoS attack detected",
             "Service degradation due to traffic spike",
@@ -826,7 +838,7 @@ RULE_BOOK: dict[str, dict] = {
         # MITRE technique, since it's a severity escalation classification
         # that can apply to any underlying incident type (ransomware, mass
         # account compromise, data breach, etc), not a specific detection.
-        "category": "SOP-08: Major Incident / Crisis Response",
+        "category": "RB-08: Major Incident / Crisis Response",
         "common_titles": [
             "Active ransomware spreading",
             "Confirmed data breach in progress",

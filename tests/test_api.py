@@ -479,6 +479,12 @@ def test_create_incident_unknown_alert_type_has_no_sop(client):
     assert resp.json()["sop"] is None
 
 
+def test_docs_disabled_by_default(client):
+    assert client.get("/docs").status_code == 404
+    assert client.get("/redoc").status_code == 404
+    assert client.get("/openapi.json").status_code == 404
+
+
 def test_create_incident_rejects_non_json_body(client):
     """FastAPI's own Pydantic body parsing already requires valid JSON
     matching the schema - a plain cross-site <form> POST can't produce

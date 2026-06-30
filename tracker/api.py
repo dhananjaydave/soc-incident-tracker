@@ -58,7 +58,18 @@ async def lifespan(app: FastAPI):
     stop_scheduler()
 
 
-app = FastAPI(title="SOC Incident Tracker", version="1.0.0", lifespan=lifespan)
+# FastAPI's auto-generated docs/schema expose every route, field name, and
+# request/response shape - useful in dev, but for a deployed internal
+# security tool it's free recon for anyone who finds the hostname (every
+# route is still auth-gated, but there's no reason to hand out the map).
+# Disabled by default; set TRACKER_ENABLE_DOCS=1 locally if needed.
+_DOCS_ENABLED = os.environ.get("TRACKER_ENABLE_DOCS") == "1"
+app = FastAPI(
+    title="SOC Incident Tracker", version="1.0.0", lifespan=lifespan,
+    docs_url="/docs" if _DOCS_ENABLED else None,
+    redoc_url="/redoc" if _DOCS_ENABLED else None,
+    openapi_url="/openapi.json" if _DOCS_ENABLED else None,
+)
 
 _STATIC_DIR = Path(__file__).resolve().parent / "static"
 
