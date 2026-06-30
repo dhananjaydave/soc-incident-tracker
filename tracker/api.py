@@ -26,6 +26,7 @@ from .mitre_knowledge import get_technique, list_techniques, search_techniques
 from .notifications import notify
 from .pdf_export import build_incidents_pdf
 from .rule_book import CONFIDENCE_SCALE, DISPOSITION_DEFINITIONS, SOP_CATEGORIES, SUSPICIOUS_IP_GUIDE, seed_rule_book
+from .real_sop_reference import get_sop_reference
 from .rule_catalog import RULE_CATALOG
 from .rule_catalog import SOP_CATEGORIES as RULE_CATALOG_SOP_CATEGORIES
 from .rule_catalog import guess_sop_from_title, lookup_catalog_entry
@@ -463,6 +464,15 @@ async def rule_catalog_lookup(title: str, _user: str = Depends(require_auth)):
         return {"sop": sop, "title": title, "category": RULE_CATALOG_SOP_CATEGORIES.get(sop), "default_severity": None,
                 "matched": "fallback"}
     return {"sop": None, "title": title, "category": None, "default_severity": None, "matched": "none"}
+
+
+@app.get("/api/sop-reference/lookup")
+async def sop_reference_lookup(alert_title: str, _user: str = Depends(require_auth)):
+    catalog_entry = lookup_catalog_entry(alert_title)
+    sop_id = catalog_entry["sop"] if catalog_entry else guess_sop_from_title(alert_title)
+    if not sop_id:
+        return {"sop": None, "catalog_entry": None, "reference": None}
+    return {"sop": sop_id, "catalog_entry": catalog_entry, "reference": get_sop_reference(sop_id)}
 
 
 @app.get("/api/sops")

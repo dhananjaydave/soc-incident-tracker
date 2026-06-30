@@ -410,6 +410,39 @@ def test_rule_catalog_lookup_no_match(client):
     assert resp.json()["matched"] == "none"
 
 
+def test_sop_reference_lookup_requires_auth(client):
+    resp = client.get("/api/sop-reference/lookup", params={"alert_title": "Access - Gap-GP-VPN Password Spraying Attempts - Rule"})
+    assert resp.status_code == 401
+
+
+def test_sop_reference_lookup_exact_match_returns_full_reference(client):
+    _login(client)
+    resp = client.get("/api/sop-reference/lookup", params={"alert_title": "Access - Gap-GP-VPN Password Spraying Attempts - Rule"})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["sop"] == "SOP-01"
+    assert data["catalog_entry"]["default_severity"] == "High"
+    assert "Successful authentication is observed." in data["reference"]["l1_escalation_triggers"]
+
+
+def test_sop_reference_lookup_sop_without_reference_yet(client):
+    _login(client)
+    resp = client.get("/api/sop-reference/lookup", params={"alert_title": "Threat - Gap-MSFT-High - Rule"})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["sop"] == "SOP-04"
+    assert data["reference"] is None
+
+
+def test_sop_reference_lookup_no_match(client):
+    _login(client)
+    resp = client.get("/api/sop-reference/lookup", params={"alert_title": "Completely Unrelated Gibberish Title"})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["sop"] is None
+    assert data["reference"] is None
+
+
 def test_detection_quality_history_requires_auth(client):
     resp = client.get("/api/detection-quality-history", params={"alert_type": "Phishing"})
     assert resp.status_code == 401

@@ -330,7 +330,15 @@
 
         <div class="panel">
           <h2>Rule Book / SOPs</h2>
-          <p class="lede" style="margin-bottom:1rem;">Every rule below auto-fills investigation steps, required fields, Splunk hints, and a closure checklist when selected for a new ticket.</p>
+          <p class="lede" style="margin-bottom:0.8rem;">Type a real alert name to find which SOP covers it and pull up escalation criteria, verdict guidance, ServiceNow routing, and closure examples from the actual SOP document.</p>
+          <div class="field-grid">
+            <div><label>Search a real alert name</label>
+              <input id="sop-search-input" list="create-title-suggestions" placeholder="e.g. Access - Gap-GP-VPN Password Spraying Attempts - Rule">
+            </div>
+          </div>
+          <button type="button" class="secondary" id="sop-search-btn">Search</button>
+          <div id="sop-search-result" style="display:none; margin-top:0.8rem;"></div>
+          <p class="lede" style="margin:1.2rem 0 1rem;">Every rule below auto-fills investigation steps, required fields, Splunk hints, and a closure checklist when selected for a new ticket.</p>
           <form id="sop-form">
             <div class="field-grid">
               <div><label>Alert type / rule name</label><input id="sop-alert-type" required></div>
@@ -866,6 +874,79 @@
     }
     container.appendChild(h4); container.appendChild(ul);
   }
+
+  function renderSopSearchResult(data) {
+    const box = document.getElementById('sop-search-result');
+    clearChildren(box);
+    box.style.display = 'block';
+    box.className = 'rule-detail';
+    if (!data.sop) {
+      const p = document.createElement('p');
+      p.style.margin = '0';
+      p.textContent = "No matching SOP found for that alert name - check the spelling or try a shorter fragment.";
+      box.appendChild(p);
+      return;
+    }
+    const header = document.createElement('span');
+    header.className = 'cat-badge';
+    header.textContent = data.catalog_entry ? `${data.sop} - ${data.catalog_entry.category}` : data.sop;
+    box.appendChild(header);
+    if (data.catalog_entry) {
+      const sev = document.createElement('p');
+      sev.style.color = 'var(--text-dim)'; sev.style.fontSize = '0.85rem'; sev.style.margin = '0.4rem 0 0';
+      sev.textContent = `Default severity: ${data.catalog_entry.default_severity}`;
+      box.appendChild(sev);
+    }
+    const ref = data.reference;
+    if (!ref) {
+      const p = document.createElement('p');
+      p.style.color = 'var(--suspicious)';
+      p.textContent = `${data.sop} matched, but its full SOP reference content hasn't been added to the app yet.`;
+      box.appendChild(p);
+      return;
+    }
+    appendListSection(box, 'Escalate L1 -> L2 when', ref.l1_escalation_triggers);
+    appendListSection(box, 'Escalate to L3 when', ref.l3_escalation_triggers);
+
+    const vHeader = document.createElement('h4'); vHeader.textContent = `Verdict guidance for ${data.sop}`;
+    box.appendChild(vHeader);
+    const vBox = document.createElement('div'); vBox.className = 'splunk-box';
+    vBox.textContent = Object.entries(ref.verdict_guidance).map(([k, v]) => `${k}: ${v}`).join('\n');
+    box.appendChild(vBox);
+
+    if (ref.servicenow_routing && ref.servicenow_routing.length) {
+      const rHeader = document.createElement('h4'); rHeader.textContent = 'ServiceNow routing';
+      box.appendChild(rHeader);
+      for (const r of ref.servicenow_routing) {
+        const row = document.createElement('div');
+        row.style.fontSize = '0.82rem'; row.style.margin = '0.2rem 0';
+        row.textContent = `${r.action} -> ${r.queue}`;
+        box.appendChild(row);
+      }
+    }
+
+    if (ref.closure_examples && ref.closure_examples.length) {
+      const cHeader = document.createElement('h4'); cHeader.textContent = 'Closure examples';
+      box.appendChild(cHeader);
+      for (const ex of ref.closure_examples) {
+        const item = document.createElement('div');
+        item.className = 'similar-incident-item'; item.style.cursor = 'default';
+        item.textContent = `${ex.scenario} - Verdict: ${ex.verdict}, Detection quality: ${ex.detection_quality}, Closure owner: ${ex.closure_owner}`;
+        box.appendChild(item);
+      }
+    }
+  }
+
+  document.getElementById('sop-search-btn').addEventListener('click', async () => {
+    const title = document.getElementById('sop-search-input').value.trim();
+    if (!title) return;
+    try {
+      const data = await api(`/api/sop-reference/lookup?alert_title=${encodeURIComponent(title)}`);
+      renderSopSearchResult(data);
+    } catch (err) {
+      showToast(err.message, true);
+    }
+  });
 
   function renderRuleDetail(sop) {
     const container = document.createElement('div');
