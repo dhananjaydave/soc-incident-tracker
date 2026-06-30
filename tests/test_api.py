@@ -307,6 +307,101 @@ def test_set_confidence_nonexistent_incident_404(client):
     assert resp.status_code == 404
 
 
+def test_disposition_options_requires_auth(client):
+    resp = client.get("/api/disposition-options")
+    assert resp.status_code == 401
+
+
+def test_disposition_options_returns_five_verdicts(client):
+    _login(client)
+    resp = client.get("/api/disposition-options")
+    assert len(resp.json()["verdicts"]) == 5
+    assert "Malicious" in resp.json()["verdicts"]
+
+
+def test_set_disposition_requires_auth(client):
+    resp = client.post("/api/incidents/1/disposition", json={
+        "verdict": "Malicious", "activity_occurred": True, "detection_quality": "Working",
+    })
+    assert resp.status_code == 401
+
+
+def test_set_disposition_updates_incident(client):
+    _login(client)
+    created = client.post("/api/incidents", json={"alert_type": "Phishing", "title": "test"}).json()["incident"]
+    resp = client.post(f"/api/incidents/{created['id']}/disposition", json={
+        "verdict": "Malicious", "activity_occurred": True, "detection_quality": "Working",
+    })
+    assert resp.status_code == 200
+    fetched = client.get(f"/api/incidents/{created['id']}").json()["incident"]
+    assert fetched["disposition_verdict"] == "Malicious"
+
+
+def test_set_disposition_invalid_verdict_rejected(client):
+    _login(client)
+    created = client.post("/api/incidents", json={"alert_type": "Phishing", "title": "test"}).json()["incident"]
+    resp = client.post(f"/api/incidents/{created['id']}/disposition", json={
+        "verdict": "Definitely Bad", "activity_occurred": True, "detection_quality": "Working",
+    })
+    assert resp.status_code == 400
+
+
+def test_set_disposition_authorized_without_evidence_rejected(client):
+    _login(client)
+    created = client.post("/api/incidents", json={"alert_type": "Phishing", "title": "test"}).json()["incident"]
+    resp = client.post(f"/api/incidents/{created['id']}/disposition", json={
+        "verdict": "Authorized", "activity_occurred": True, "detection_quality": "Working",
+    })
+    assert resp.status_code == 400
+
+
+def test_set_disposition_nonexistent_incident_404(client):
+    _login(client)
+    resp = client.post("/api/incidents/99999/disposition", json={
+        "verdict": "Malicious", "activity_occurred": True, "detection_quality": "Working",
+    })
+    assert resp.status_code == 404
+
+
+def test_rule_catalog_requires_auth(client):
+    resp = client.get("/api/rule-catalog")
+    assert resp.status_code == 401
+
+
+def test_rule_catalog_returns_entries_with_expected_shape(client):
+    _login(client)
+    resp = client.get("/api/rule-catalog")
+    assert resp.status_code == 200
+    entries = resp.json()
+    assert len(entries) > 50
+    sample = entries[0]
+    assert set(sample.keys()) == {"sop", "title", "category", "category_prefix", "default_severity"}
+
+
+def test_rule_catalog_lookup_exact_match(client):
+    _login(client)
+    resp = client.get("/api/rule-catalog/lookup", params={"title": "Access - Gap-GP-VPN Password Spraying Attempts - Rule"})
+    assert resp.status_code == 200
+    assert resp.json()["sop"] == "SOP-01"
+    assert resp.json()["default_severity"] == "High"
+
+
+def test_rule_catalog_lookup_fallback_keyword_match(client):
+    _login(client)
+    resp = client.get("/api/rule-catalog/lookup", params={"title": "Some New VPN Detection Rule"})
+    assert resp.status_code == 200
+    assert resp.json()["sop"] == "SOP-01"
+    assert resp.json()["matched"] == "fallback"
+
+
+def test_rule_catalog_lookup_no_match(client):
+    _login(client)
+    resp = client.get("/api/rule-catalog/lookup", params={"title": "Completely Unrelated Gibberish Title"})
+    assert resp.status_code == 200
+    assert resp.json()["sop"] is None
+    assert resp.json()["matched"] == "none"
+
+
 def test_create_incident_unknown_alert_type_has_no_sop(client):
     _login(client)
     resp = client.post("/api/incidents", json={"alert_type": "Totally Custom Type", "title": "test"})

@@ -16,6 +16,16 @@ DEFAULT_DB_PATH = os.environ.get("TRACKER_DB_PATH", "tracker.db")
 VALID_STATUSES = ("open", "escalated", "resolved", "false_positive")
 VALID_PRIORITIES = ("low", "medium", "high")
 
+# The core disposition/verdict enum - the single most customer-visible
+# field on a closed ticket (per GAP Cyber Defense's alert schema). Kept
+# separate from the free-text disposition_reason: verdict is the fixed
+# classification, disposition_reason remains the analyst's prose
+# explanation of *why*.
+VALID_DISPOSITION_VERDICTS = (
+    "Malicious", "Unresolved-suspicious", "Policy violation", "Authorized", "Benign-other",
+)
+VALID_DETECTION_QUALITY = ("Working", "Logic gap", "Context gap", "Data gap", "Duplicate")
+
 # The analyst's own self-reported checklist - explicitly ticked per
 # incident, distinct from investigation_score.py's heuristic estimate
 # (which infers status from existing data rather than asking).
@@ -55,6 +65,14 @@ def _connect(db_path: str) -> sqlite3.Connection:
         conn.execute("ALTER TABLE incidents ADD COLUMN checklist_json TEXT")
     if "confidence_percent" not in existing_incident_columns:
         conn.execute("ALTER TABLE incidents ADD COLUMN confidence_percent INTEGER")
+    if "disposition_verdict" not in existing_incident_columns:
+        conn.execute("ALTER TABLE incidents ADD COLUMN disposition_verdict TEXT")
+    if "evidence_reference" not in existing_incident_columns:
+        conn.execute("ALTER TABLE incidents ADD COLUMN evidence_reference TEXT")
+    if "activity_occurred" not in existing_incident_columns:
+        conn.execute("ALTER TABLE incidents ADD COLUMN activity_occurred INTEGER")
+    if "detection_quality" not in existing_incident_columns:
+        conn.execute("ALTER TABLE incidents ADD COLUMN detection_quality TEXT")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_incidents_affected_user ON incidents(affected_user)")
     conn.execute(
         """
@@ -102,6 +120,8 @@ def _row_to_incident(row: sqlite3.Row) -> dict:
     raw = incident.pop("checklist_json", None)
     saved = json.loads(raw) if raw else {}
     incident["checklist"] = {item: saved.get(item, False) for item in CHECKLIST_ITEMS}
+    if incident.get("activity_occurred") is not None:
+        incident["activity_occurred"] = bool(incident["activity_occurred"])
     return incident
 
 
@@ -177,6 +197,22 @@ def _set_confidence_sync(db_path: str, incident_id: int, confidence_percent: int
         cursor = conn.execute(
             "UPDATE incidents SET confidence_percent = ?, updated_at = ? WHERE id = ?",
             (confidence_percent, now, incident_id),
+        )
+        conn.commit()
+        return cursor.rowcount > 0
+    finally:
+        conn.close()
+
+
+def _set_disposition_sync(db_path: str, incident_id: int, verdict: str, evidence_reference: str | None,
+                           activity_occurred: bool, detection_quality: str) -> bool:
+    conn = _connect(db_path)
+    try:
+        now = datetime.now(timezone.utc).isoformat()
+        cursor = conn.execute(
+            "UPDATE incidents SET disposition_verdict = ?, evidence_reference = ?, "
+            "activity_occurred = ?, detection_quality = ?, updated_at = ? WHERE id = ?",
+            (verdict, evidence_reference, int(activity_occurred), detection_quality, now, incident_id),
         )
         conn.commit()
         return cursor.rowcount > 0
@@ -473,6 +509,19 @@ class TrackerDB:
         if not 0 <= confidence_percent <= 100:
             raise ValueError("confidence_percent must be between 0 and 100")
         return await asyncio.to_thread(_set_confidence_sync, self.db_path, incident_id, confidence_percent)
+
+    async def set_disposition(self, incident_id: int, verdict: str, evidence_reference: str | None,
+                               activity_occurred: bool, detection_quality: str) -> bool:
+        if verdict not in VALID_DISPOSITION_VERDICTS:
+            raise ValueError(f"Invalid disposition verdict {verdict!r} - must be one of {VALID_DISPOSITION_VERDICTS}")
+        if detection_quality not in VALID_DETECTION_QUALITY:
+            raise ValueError(f"Invalid detection quality {detection_quality!r} - must be one of {VALID_DETECTION_QUALITY}")
+        if verdict == "Authorized" and not (evidence_reference and evidence_reference.strip()):
+            raise ValueError("Disposition 'Authorized' requires an evidence reference (e.g. a ServiceNow/Jira ticket).")
+        return await asyncio.to_thread(
+            _set_disposition_sync, self.db_path, incident_id, verdict, evidence_reference,
+            activity_occurred, detection_quality,
+        )
 
     async def set_awaiting_stakeholder(self, incident_id: int, awaiting: bool) -> bool:
         return await asyncio.to_thread(_set_awaiting_stakeholder_sync, self.db_path, incident_id, awaiting)

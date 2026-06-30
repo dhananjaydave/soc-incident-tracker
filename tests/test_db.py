@@ -121,6 +121,63 @@ async def test_set_confidence_on_missing_incident_returns_false(db):
     assert result is False
 
 
+async def test_new_incident_has_no_disposition_by_default(db):
+    incident = await db.create_incident("Phishing", "test")
+    assert incident["disposition_verdict"] is None
+    assert incident["evidence_reference"] is None
+    assert incident["activity_occurred"] is None
+    assert incident["detection_quality"] is None
+
+
+async def test_set_disposition_updates_incident(db):
+    incident = await db.create_incident("Phishing", "test")
+    await db.set_disposition(incident["id"], "Malicious", None, True, "Working")
+    fetched = await db.get_incident(incident["id"])
+    assert fetched["disposition_verdict"] == "Malicious"
+    assert fetched["activity_occurred"] is True
+    assert fetched["detection_quality"] == "Working"
+
+
+async def test_set_disposition_rejects_invalid_verdict(db):
+    incident = await db.create_incident("Phishing", "test")
+    with pytest.raises(ValueError):
+        await db.set_disposition(incident["id"], "Definitely Bad", None, True, "Working")
+
+
+async def test_set_disposition_rejects_invalid_detection_quality(db):
+    incident = await db.create_incident("Phishing", "test")
+    with pytest.raises(ValueError):
+        await db.set_disposition(incident["id"], "Malicious", None, True, "Not a real quality")
+
+
+async def test_set_disposition_authorized_requires_evidence_reference(db):
+    incident = await db.create_incident("Phishing", "test")
+    with pytest.raises(ValueError):
+        await db.set_disposition(incident["id"], "Authorized", None, True, "Working")
+    with pytest.raises(ValueError):
+        await db.set_disposition(incident["id"], "Authorized", "   ", True, "Working")
+
+
+async def test_set_disposition_authorized_with_evidence_reference_succeeds(db):
+    incident = await db.create_incident("Phishing", "test")
+    await db.set_disposition(incident["id"], "Authorized", "SNOW0012345", True, "Working")
+    fetched = await db.get_incident(incident["id"])
+    assert fetched["disposition_verdict"] == "Authorized"
+    assert fetched["evidence_reference"] == "SNOW0012345"
+
+
+async def test_set_disposition_activity_did_not_occur(db):
+    incident = await db.create_incident("Phishing", "test")
+    await db.set_disposition(incident["id"], "Benign-other", None, False, "Working")
+    fetched = await db.get_incident(incident["id"])
+    assert fetched["activity_occurred"] is False
+
+
+async def test_set_disposition_on_missing_incident_returns_false(db):
+    result = await db.set_disposition(99999, "Malicious", None, True, "Working")
+    assert result is False
+
+
 async def test_get_nonexistent_incident_returns_none(db):
     assert await db.get_incident(99999) is None
 

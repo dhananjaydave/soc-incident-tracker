@@ -19,13 +19,16 @@ from pydantic import BaseModel, Field
 
 from . import auth, integrations, telegram_bot
 from .attack_story import build_attack_story
-from .db import CHECKLIST_ITEMS, TrackerDB
+from .db import CHECKLIST_ITEMS, VALID_DETECTION_QUALITY, VALID_DISPOSITION_VERDICTS, TrackerDB
 from .detection_gap import compute_detection_gap
 from .investigation_score import compute_investigation_score
 from .mitre_knowledge import get_technique, list_techniques, search_techniques
 from .notifications import notify
 from .pdf_export import build_incidents_pdf
 from .rule_book import CONFIDENCE_SCALE, SOP_CATEGORIES, SUSPICIOUS_IP_GUIDE, seed_rule_book
+from .rule_catalog import RULE_CATALOG
+from .rule_catalog import SOP_CATEGORIES as RULE_CATALOG_SOP_CATEGORIES
+from .rule_catalog import guess_sop_from_title, lookup_catalog_entry
 from .scheduler import start_scheduler, stop_scheduler
 from .security_feed import fetch_all_feeds, merge_latest
 from .seed_sops import seed_default_sops
@@ -130,6 +133,13 @@ class ChecklistItemRequest(BaseModel):
 
 class ConfidenceRequest(BaseModel):
     confidence_percent: int = Field(ge=0, le=100)
+
+
+class DispositionRequest(BaseModel):
+    verdict: str = Field(max_length=32)
+    evidence_reference: str | None = Field(default=None, max_length=256)
+    activity_occurred: bool
+    detection_quality: str = Field(max_length=32)
 
 
 class EmergencyIncidentRequest(BaseModel):
@@ -289,6 +299,24 @@ async def set_confidence(incident_id: int, body: ConfidenceRequest, _user: str =
     return {"status": "ok"}
 
 
+@app.get("/api/disposition-options")
+async def disposition_options(_user: str = Depends(require_auth)):
+    return {"verdicts": list(VALID_DISPOSITION_VERDICTS), "detection_quality": list(VALID_DETECTION_QUALITY)}
+
+
+@app.post("/api/incidents/{incident_id}/disposition")
+async def set_disposition(incident_id: int, body: DispositionRequest, _user: str = Depends(require_auth)):
+    try:
+        updated = await db.set_disposition(
+            incident_id, body.verdict, body.evidence_reference, body.activity_occurred, body.detection_quality,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    if not updated:
+        raise HTTPException(status_code=404, detail="Incident not found.")
+    return {"status": "ok"}
+
+
 EMERGENCY_ALERT_TYPE = "Major Incident"
 
 
@@ -405,6 +433,23 @@ async def suspicious_ip_guide(_user: str = Depends(require_auth)):
 @app.get("/api/disposition-history")
 async def disposition_history(alert_type: str, _user: str = Depends(require_auth)):
     return await db.get_disposition_history(alert_type)
+
+
+@app.get("/api/rule-catalog")
+async def rule_catalog(_user: str = Depends(require_auth)):
+    return RULE_CATALOG
+
+
+@app.get("/api/rule-catalog/lookup")
+async def rule_catalog_lookup(title: str, _user: str = Depends(require_auth)):
+    entry = lookup_catalog_entry(title)
+    if entry:
+        return entry
+    sop = guess_sop_from_title(title)
+    if sop:
+        return {"sop": sop, "title": title, "category": RULE_CATALOG_SOP_CATEGORIES.get(sop), "default_severity": None,
+                "matched": "fallback"}
+    return {"sop": None, "title": title, "category": None, "default_severity": None, "matched": "none"}
 
 
 @app.get("/api/sops")

@@ -94,6 +94,11 @@
   .priority-low { background: rgba(124,138,163,0.15); color: var(--text-dim); }
   .priority-medium { background: rgba(251,191,36,0.12); color: var(--suspicious); }
   .priority-high { background: rgba(248,113,113,0.12); color: var(--malicious); }
+  .verdict-malicious { background: rgba(248,113,113,0.18); color: var(--malicious); font-weight: 700; }
+  .verdict-unresolved-suspicious { background: rgba(251,191,36,0.12); color: var(--suspicious); }
+  .verdict-policy-violation { background: rgba(251,191,36,0.12); color: var(--suspicious); }
+  .verdict-authorized { background: rgba(52,211,153,0.12); color: var(--clean); }
+  .verdict-benign-other { background: rgba(52,211,153,0.12); color: var(--clean); }
 
   .updates-list { list-style: none; padding: 0; margin: 0 0 1rem; }
   .updates-list li { padding: 0.5rem 0; border-bottom: 1px solid var(--border); font-size: 0.84rem; }
@@ -103,6 +108,13 @@
   .action-row { display: flex; gap: 0.6rem; flex-wrap: wrap; margin-top: 0.8rem; align-items: center; }
   .checkbox-line { display: flex; align-items: center; gap: 0.5rem; font-size: 0.85rem; color: var(--text-dim); margin: 0.6rem 0; }
   .checkbox-line input { width: auto; margin: 0; accent-color: var(--accent); cursor: pointer; }
+
+  .disposition-box {
+    border: 1px solid var(--accent); border-left: 4px solid var(--accent);
+    background: rgba(245,158,11,0.06); border-radius: 8px; padding: 0.9rem 1rem; margin: 0.8rem 0 1rem;
+  }
+  .disposition-box > label { font-size: 0.74rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--accent); font-weight: 700; }
+  .disposition-box .field-grid:last-child { margin-bottom: 0; }
 
   .mitre-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 0.8rem; }
   .mitre-card {
@@ -265,6 +277,7 @@
               <div><label>Title</label>
                 <input id="create-title" list="create-title-suggestions" placeholder="Pick a suggestion or type your own" required>
                 <datalist id="create-title-suggestions"></datalist>
+                <div id="create-title-catalog-info" style="display:none; font-size:0.78rem; color:var(--text-dim); margin-top:0.3rem;"></div>
               </div>
             </div>
             <div class="field-grid">
@@ -332,6 +345,34 @@
           <h2 id="detail-title" style="color:var(--text); text-transform:none; font-size:1.05rem; letter-spacing:0;"></h2>
           <p id="detail-meta" style="font-size:0.83rem; color:var(--text-dim);"></p>
           <p id="detail-description"></p>
+          <div class="disposition-box" id="detail-disposition-box">
+            <label style="margin:0 0 0.5rem; display:block;">DISPOSITION - the verdict that matters most for reporting</label>
+            <div class="field-grid">
+              <div><label>Verdict</label>
+                <select id="detail-disposition-verdict">
+                  <option value="">(not yet determined)</option>
+                </select>
+              </div>
+              <div><label>Detection quality</label>
+                <select id="detail-detection-quality">
+                  <option value="">(not set)</option>
+                </select>
+              </div>
+            </div>
+            <div class="field-grid">
+              <div><label>Activity occurred?</label>
+                <select id="detail-activity-occurred">
+                  <option value="">(not set)</option>
+                  <option value="true">Yes - confirmed</option>
+                  <option value="false">No - did not occur</option>
+                </select>
+              </div>
+              <div id="detail-evidence-reference-wrap" style="display:none;">
+                <label>Evidence reference (required for Authorized)</label>
+                <input id="detail-evidence-reference" placeholder="SNow/Jira ticket # or approval link">
+              </div>
+            </div>
+          </div>
           <div class="field-grid">
             <div><label>Priority</label>
               <select id="detail-priority">
@@ -620,7 +661,7 @@
     // with no visible error.
     const results = await Promise.allSettled([
       loadRuleBookCategories(), loadSops(), loadTickets(''), loadSummary(), loadMitreList(), loadDetectionGap(),
-      loadInvestigateReferences(),
+      loadInvestigateReferences(), loadDispositionOptions(), loadRuleCatalog(),
     ]);
     results.forEach((r, i) => { if (r.status === 'rejected') console.error('Dashboard panel', i, 'failed to load:', r.reason); });
   }
@@ -779,6 +820,71 @@
     return container;
   }
 
+  // --- Real Splunk alert title catalog (77 titles, 13 SOPs - GAP Cyber
+  // Defense's actual environment, not invented playbook buckets) ---
+  let ruleCatalogCache = [];
+
+  async function loadRuleCatalog() {
+    ruleCatalogCache = await api('/api/rule-catalog');
+    const datalist = document.getElementById('create-title-suggestions');
+    for (const entry of ruleCatalogCache) {
+      const opt = document.createElement('option');
+      opt.value = entry.title;
+      datalist.appendChild(opt);
+    }
+  }
+
+  function lookupCatalogEntry(title) {
+    return ruleCatalogCache.find(e => e.title === title) || null;
+  }
+
+  async function loadDispositionOptions() {
+    const options = await api('/api/disposition-options');
+    const verdictSelect = document.getElementById('detail-disposition-verdict');
+    for (const v of options.verdicts) {
+      const opt = document.createElement('option'); opt.value = v; opt.textContent = v;
+      verdictSelect.appendChild(opt);
+    }
+    const qualitySelect = document.getElementById('detail-detection-quality');
+    for (const q of options.detection_quality) {
+      const opt = document.createElement('option'); opt.value = q; opt.textContent = q;
+      qualitySelect.appendChild(opt);
+    }
+  }
+
+  function toggleEvidenceReferenceVisibility() {
+    const verdict = document.getElementById('detail-disposition-verdict').value;
+    document.getElementById('detail-evidence-reference-wrap').style.display = verdict === 'Authorized' ? 'block' : 'none';
+  }
+
+  async function saveDisposition() {
+    const verdict = document.getElementById('detail-disposition-verdict').value;
+    const detectionQuality = document.getElementById('detail-detection-quality').value;
+    const activityRaw = document.getElementById('detail-activity-occurred').value;
+    if (!verdict || !detectionQuality || activityRaw === '') return;
+    try {
+      await api(`/api/incidents/${currentTicketId}/disposition`, {
+        method: 'POST',
+        body: JSON.stringify({
+          verdict, detection_quality: detectionQuality,
+          activity_occurred: activityRaw === 'true',
+          evidence_reference: document.getElementById('detail-evidence-reference').value || null,
+        }),
+      });
+      showToast('Disposition saved.', false);
+    } catch (err) {
+      showToast(err.message, true);
+    }
+  }
+
+  document.getElementById('detail-disposition-verdict').addEventListener('change', () => {
+    toggleEvidenceReferenceVisibility();
+    saveDisposition();
+  });
+  document.getElementById('detail-detection-quality').addEventListener('change', saveDisposition);
+  document.getElementById('detail-activity-occurred').addEventListener('change', saveDisposition);
+  document.getElementById('detail-evidence-reference').addEventListener('change', saveDisposition);
+
   async function loadSops() {
     sopCache = await api('/api/sops');
     const select = document.getElementById('create-alert-type');
@@ -851,6 +957,18 @@
   }
 
   document.getElementById('create-alert-type').addEventListener('change', updateCreateRulePreview);
+
+  const CATALOG_SEVERITY_TO_PRIORITY = { Critical: 'high', High: 'high', Medium: 'medium', Low: 'low', Info: 'low' };
+
+  document.getElementById('create-title').addEventListener('input', (e) => {
+    const infoBox = document.getElementById('create-title-catalog-info');
+    const entry = lookupCatalogEntry(e.target.value.trim());
+    if (!entry) { infoBox.style.display = 'none'; return; }
+    infoBox.style.display = 'block';
+    infoBox.textContent = `Catalog match: ${entry.sop} · ${entry.category} · default severity ${entry.default_severity}`;
+    const mappedPriority = CATALOG_SEVERITY_TO_PRIORITY[entry.default_severity];
+    if (mappedPriority) document.getElementById('create-priority').value = mappedPriority;
+  });
 
   document.getElementById('sop-form').addEventListener('submit', async (e) => {
     e.preventDefault();
@@ -944,6 +1062,12 @@
       priorityBadge.className = 'status-badge priority-' + t.priority;
       priorityBadge.textContent = t.priority;
       badgeRow.appendChild(priorityBadge);
+      if (t.disposition_verdict) {
+        const verdictBadge = document.createElement('span');
+        verdictBadge.className = 'status-badge verdict-' + t.disposition_verdict.toLowerCase().replace(/\s+/g, '-');
+        verdictBadge.textContent = t.disposition_verdict;
+        badgeRow.appendChild(verdictBadge);
+      }
       const badge = document.createElement('span');
       badge.className = 'status-badge status-' + t.status;
       badge.textContent = t.status.replace('_', ' ');
@@ -1018,6 +1142,13 @@
     document.getElementById('detail-awaiting-stakeholder').checked = !!data.incident.awaiting_stakeholder_reply;
     document.getElementById('detail-priority').value = data.incident.priority;
     document.getElementById('detail-confidence').value = (data.incident.confidence_percent === null || data.incident.confidence_percent === undefined) ? '' : data.incident.confidence_percent;
+
+    document.getElementById('detail-disposition-verdict').value = data.incident.disposition_verdict || '';
+    document.getElementById('detail-detection-quality').value = data.incident.detection_quality || '';
+    document.getElementById('detail-activity-occurred').value =
+      (data.incident.activity_occurred === null || data.incident.activity_occurred === undefined) ? '' : String(data.incident.activity_occurred);
+    document.getElementById('detail-evidence-reference').value = data.incident.evidence_reference || '';
+    toggleEvidenceReferenceVisibility();
 
     const checklistBox = document.getElementById('detail-checklist');
     clearChildren(checklistBox);
@@ -1265,6 +1396,7 @@
     const mitre = (currentIncidentData.mitre_techniques || []).map(t => `${t.id} (${t.name})`).join(', ');
     const lines = [];
 
+    lines.push(`VERDICT: ${incident.disposition_verdict || 'NOT YET DETERMINED'}`, '====================', '');
     lines.push('1. EXECUTIVE SUMMARY', sections.executive_summary || '(no template for this alert type)', '');
     lines.push('2. ALERT DESCRIPTION', s.alert_description || '(none)', '');
     lines.push('3. DETECTION ENGINEERING');
@@ -1295,7 +1427,11 @@
     for (const r of sections.recommendations || []) lines.push(`- ${r}`);
     if (!sections.recommendations) lines.push('(none)');
     lines.push('');
-    lines.push('9. CLOSURE REASON', incident.disposition_reason || '(ticket not yet closed)');
+    lines.push('9. CLOSURE REASON');
+    lines.push(`Disposition: ${incident.disposition_verdict || '(not yet determined)'}`);
+    if (incident.evidence_reference) lines.push(`Evidence reference: ${incident.evidence_reference}`);
+    if (incident.detection_quality) lines.push(`Detection quality: ${incident.detection_quality}`);
+    lines.push(incident.disposition_reason || '(ticket not yet closed)');
 
     return lines.join('\n');
   }
