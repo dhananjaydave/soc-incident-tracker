@@ -216,6 +216,44 @@ async def test_get_similar_incidents_with_exclude_id_excludes_it(db):
     assert ids == {b["id"]}
 
 
+async def test_new_incident_has_empty_suggested_steps_by_default(db):
+    incident = await db.create_incident("Phishing", "test")
+    assert incident["suggested_steps"] == {"investigation": [], "findings": [], "action": [], "notes": []}
+
+
+async def test_create_incident_accepts_initial_suggested_steps(db):
+    incident = await db.create_incident("Phishing", "test", suggested_steps={"investigation": ["Step one"]})
+    fetched = await db.get_incident(incident["id"])
+    assert fetched["suggested_steps"]["investigation"] == ["Step one"]
+    assert fetched["suggested_steps"]["findings"] == []
+
+
+async def test_create_incident_rejects_invalid_suggested_steps_category(db):
+    with pytest.raises(ValueError):
+        await db.create_incident("Phishing", "test", suggested_steps={"not_a_category": ["x"]})
+
+
+async def test_set_suggested_step_adds_and_removes(db):
+    incident = await db.create_incident("Phishing", "test")
+    await db.set_suggested_step(incident["id"], "findings", "Found something", True)
+    fetched = await db.get_incident(incident["id"])
+    assert fetched["suggested_steps"]["findings"] == ["Found something"]
+    await db.set_suggested_step(incident["id"], "findings", "Found something", False)
+    fetched = await db.get_incident(incident["id"])
+    assert fetched["suggested_steps"]["findings"] == []
+
+
+async def test_set_suggested_step_rejects_invalid_category(db):
+    incident = await db.create_incident("Phishing", "test")
+    with pytest.raises(ValueError):
+        await db.set_suggested_step(incident["id"], "bogus", "x", True)
+
+
+async def test_set_suggested_step_on_missing_incident_returns_false(db):
+    result = await db.set_suggested_step(99999, "action", "x", True)
+    assert result is False
+
+
 async def test_get_nonexistent_incident_returns_none(db):
     assert await db.get_incident(99999) is None
 

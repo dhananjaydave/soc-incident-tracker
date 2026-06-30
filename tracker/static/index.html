@@ -116,6 +116,12 @@
   .disposition-box > label { font-size: 0.74rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--accent); font-weight: 700; }
   .disposition-box .field-grid:last-child { margin-bottom: 0; }
 
+  .suggestion-box { border: 1px solid var(--border); border-radius: 8px; padding: 0.6rem 0.8rem; margin: 0.4rem 0 0.9rem; background: var(--bg-raised); }
+  .suggestion-box-header { display: flex; justify-content: space-between; align-items: center; gap: 0.6rem; font-size: 0.76rem; color: var(--text-dim); margin-bottom: 0.4rem; }
+  .suggestion-count { font-family: var(--mono); color: var(--accent); flex-shrink: 0; }
+  .suggestion-item { display: flex; align-items: flex-start; gap: 0.5rem; font-size: 0.83rem; padding: 0.25rem 0; cursor: pointer; }
+  .suggestion-item input { width: auto; margin: 0.2rem 0 0; accent-color: var(--accent); cursor: pointer; flex-shrink: 0; }
+
   .mitre-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 0.8rem; }
   .mitre-card {
     background: #070a12; border: 1px solid var(--border); border-radius: 9px; padding: 0.9rem 1rem; cursor: pointer;
@@ -612,10 +618,31 @@
           </div>
           <label>INVESTIGATION</label>
           <textarea id="tb-investigation" style="min-height:50px;">Reviewed logs, related activity, historical events, and user behavior.</textarea>
+          <div class="suggestion-box" id="tb-investigation-suggestions" style="display:none;">
+            <div class="suggestion-box-header">
+              <span>Suggested steps for this alert type (from the Rule Book) - ticking inserts it above</span>
+              <span class="suggestion-count" id="tb-investigation-suggestions-count"></span>
+            </div>
+            <div id="tb-investigation-suggestions-list"></div>
+          </div>
           <label>FINDINGS</label>
           <textarea id="tb-findings" style="min-height:60px;" placeholder="Short summary of what you found"></textarea>
+          <div class="suggestion-box" id="tb-findings-suggestions" style="display:none;">
+            <div class="suggestion-box-header">
+              <span>Candidate findings for this alert type</span>
+              <span class="suggestion-count" id="tb-findings-suggestions-count"></span>
+            </div>
+            <div id="tb-findings-suggestions-list"></div>
+          </div>
           <label>ACTION</label>
           <textarea id="tb-action" style="min-height:50px;" placeholder="What was done or is recommended"></textarea>
+          <div class="suggestion-box" id="tb-action-suggestions" style="display:none;">
+            <div class="suggestion-box-header">
+              <span>Suggested containment/response actions</span>
+              <span class="suggestion-count" id="tb-action-suggestions-count"></span>
+            </div>
+            <div id="tb-action-suggestions-list"></div>
+          </div>
           <div class="disposition-box">
             <label style="margin:0 0 0.5rem; display:block;">DISPOSITION - the verdict that matters most for reporting</label>
             <div class="field-grid">
@@ -642,6 +669,13 @@
           </div>
           <label>NOTES</label>
           <textarea id="tb-notes" style="min-height:50px;" placeholder="Any additional points"></textarea>
+          <div class="suggestion-box" id="tb-notes-suggestions" style="display:none;">
+            <div class="suggestion-box-header">
+              <span>Flag if any apply (false-positive indicators for this alert type)</span>
+              <span class="suggestion-count" id="tb-notes-suggestions-count"></span>
+            </div>
+            <div id="tb-notes-suggestions-list"></div>
+          </div>
           <div class="field-grid">
             <div><label>Priority for the ticket</label>
               <select id="tb-priority">
@@ -1089,7 +1123,83 @@
       opt.textContent = sop.alert_type;
       select.appendChild(opt);
     }
+    updateTbSuggestions();
   }
+
+  // --- Triage Builder: Rule Book suggested steps (investigation/findings/action/notes) ---
+  let tbTickedSteps = { investigation: new Set(), findings: new Set(), action: new Set(), notes: new Set() };
+
+  function tbSuggestionLists(sop) {
+    const s = (sop && sop.structured) || {};
+    const sections = s.description_sections || {};
+    const actionItems = [...new Set([...(s.containment_actions || []), ...(sections.actions_taken || [])])];
+    return {
+      investigation: s.investigation_steps || [],
+      findings: sections.findings || [],
+      action: actionItems,
+      notes: s.false_positive_indicators || [],
+    };
+  }
+
+  function tbUpdateSuggestionCount(category, total) {
+    document.getElementById(`tb-${category}-suggestions-count`).textContent = `${tbTickedSteps[category].size} of ${total} followed`;
+  }
+
+  function tbInsertLine(category, text) {
+    const textarea = document.getElementById(`tb-${category}`);
+    const line = `- ${text}`;
+    const lines = textarea.value.split('\n').filter(l => l.trim().length > 0);
+    if (!lines.includes(line)) {
+      lines.push(line);
+      textarea.value = lines.join('\n');
+    }
+  }
+
+  function tbRemoveLine(category, text) {
+    const textarea = document.getElementById(`tb-${category}`);
+    const line = `- ${text}`;
+    textarea.value = textarea.value.split('\n').filter(l => l !== line).join('\n');
+  }
+
+  function tbRenderSuggestionCategory(category, items) {
+    const wrap = document.getElementById(`tb-${category}-suggestions`);
+    const listBox = document.getElementById(`tb-${category}-suggestions-list`);
+    clearChildren(listBox);
+    tbTickedSteps[category] = new Set();
+    if (!items.length) { wrap.style.display = 'none'; return; }
+    wrap.style.display = 'block';
+    for (const text of items) {
+      const label = document.createElement('label');
+      label.className = 'suggestion-item';
+      const cb = document.createElement('input');
+      cb.type = 'checkbox';
+      cb.addEventListener('change', () => {
+        if (cb.checked) {
+          tbTickedSteps[category].add(text);
+          tbInsertLine(category, text);
+        } else {
+          tbTickedSteps[category].delete(text);
+          tbRemoveLine(category, text);
+        }
+        tbUpdateSuggestionCount(category, items.length);
+      });
+      label.appendChild(cb);
+      label.appendChild(document.createTextNode(text));
+      listBox.appendChild(label);
+    }
+    tbUpdateSuggestionCount(category, items.length);
+  }
+
+  function updateTbSuggestions() {
+    const alertType = document.getElementById('tb-alert-type').value;
+    const sop = sopCache.find(s => s.alert_type === alertType);
+    const lists = tbSuggestionLists(sop);
+    for (const category of ['investigation', 'findings', 'action', 'notes']) {
+      tbRenderSuggestionCategory(category, lists[category]);
+    }
+  }
+
+  document.getElementById('tb-alert-type').addEventListener('change', updateTbSuggestions);
 
   function buildTriageWriteup() {
     const v = (id) => document.getElementById(id).value.trim();
@@ -1155,6 +1265,10 @@
           alert_type: alertType, title, description: document.getElementById('tb-output').value,
           affected_user: document.getElementById('tb-user').value.trim() || null,
           priority: document.getElementById('tb-priority').value,
+          suggested_steps: {
+            investigation: [...tbTickedSteps.investigation], findings: [...tbTickedSteps.findings],
+            action: [...tbTickedSteps.action], notes: [...tbTickedSteps.notes],
+          },
         }),
       });
       const incidentId = created.incident.id;

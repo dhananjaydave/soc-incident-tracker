@@ -132,6 +132,13 @@ class CreateIncidentRequest(BaseModel):
     external_ticket_ref: str | None = Field(default=None, max_length=128)
     affected_user: str | None = Field(default=None, max_length=256)
     priority: str = Field(default="medium", max_length=16)
+    suggested_steps: dict[str, list[str]] | None = None
+
+
+class SuggestedStepRequest(BaseModel):
+    category: str = Field(max_length=32)
+    step_text: str = Field(max_length=1024)
+    checked: bool
 
 
 class PriorityRequest(BaseModel):
@@ -264,13 +271,24 @@ async def create_incident(body: CreateIncidentRequest, _user: str = Depends(requ
     try:
         incident = await db.create_incident(
             body.alert_type, body.title, body.description, body.external_ticket_ref, body.affected_user,
-            body.priority,
+            body.priority, body.suggested_steps,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     sop = await db.get_sop(body.alert_type)
     await notify(f"SOC Tracker: new ticket #{incident['id']}", f"[{body.alert_type}] {body.title} (priority: {body.priority})")
     return {"incident": incident, "sop": sop}
+
+
+@app.post("/api/incidents/{incident_id}/suggested-steps")
+async def set_suggested_step(incident_id: int, body: SuggestedStepRequest, _user: str = Depends(require_auth)):
+    try:
+        updated = await db.set_suggested_step(incident_id, body.category, body.step_text, body.checked)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    if not updated:
+        raise HTTPException(status_code=404, detail="Incident not found.")
+    return {"status": "ok"}
 
 
 @app.post("/api/incidents/{incident_id}/priority")

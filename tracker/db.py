@@ -26,6 +26,15 @@ VALID_DISPOSITION_VERDICTS = (
 )
 VALID_DETECTION_QUALITY = ("Working", "Logic gap", "Context gap", "Data gap", "Duplicate")
 
+# The Rule Book's per-alert-type suggested steps (investigation_steps,
+# findings, containment/actions_taken, false_positive_indicators) the
+# analyst can tick while drafting a ticket in Triage Builder. Recorded
+# once at creation time as the text of whichever suggestions were ticked
+# - not a live-editable field on an existing ticket, since the incident
+# has no separate persistent Investigation/Findings/Action/Notes columns
+# (only one description blob) for an ongoing checklist to attach to.
+SUGGESTED_STEP_CATEGORIES = ("investigation", "findings", "action", "notes")
+
 # The analyst's own self-reported checklist - explicitly ticked per
 # incident, distinct from investigation_score.py's heuristic estimate
 # (which infers status from existing data rather than asking).
@@ -73,6 +82,8 @@ def _connect(db_path: str) -> sqlite3.Connection:
         conn.execute("ALTER TABLE incidents ADD COLUMN activity_occurred INTEGER")
     if "detection_quality" not in existing_incident_columns:
         conn.execute("ALTER TABLE incidents ADD COLUMN detection_quality TEXT")
+    if "suggested_steps_json" not in existing_incident_columns:
+        conn.execute("ALTER TABLE incidents ADD COLUMN suggested_steps_json TEXT")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_incidents_affected_user ON incidents(affected_user)")
     conn.execute(
         """
@@ -122,18 +133,25 @@ def _row_to_incident(row: sqlite3.Row) -> dict:
     incident["checklist"] = {item: saved.get(item, False) for item in CHECKLIST_ITEMS}
     if incident.get("activity_occurred") is not None:
         incident["activity_occurred"] = bool(incident["activity_occurred"])
+    raw_steps = incident.pop("suggested_steps_json", None)
+    saved_steps = json.loads(raw_steps) if raw_steps else {}
+    incident["suggested_steps"] = {cat: saved_steps.get(cat, []) for cat in SUGGESTED_STEP_CATEGORIES}
     return incident
 
 
 def _create_incident_sync(db_path: str, alert_type: str, title: str, description: str | None,
-                           external_ticket_ref: str | None, affected_user: str | None, priority: str) -> dict:
+                           external_ticket_ref: str | None, affected_user: str | None, priority: str,
+                           suggested_steps: dict | None) -> dict:
+    import json
     conn = _connect(db_path)
     try:
         now = datetime.now(timezone.utc).isoformat()
+        steps_json = json.dumps(suggested_steps) if suggested_steps else None
         cursor = conn.execute(
             "INSERT INTO incidents (alert_type, title, description, status, created_at, updated_at, "
-            "external_ticket_ref, affected_user, priority) VALUES (?, ?, ?, 'open', ?, ?, ?, ?, ?)",
-            (alert_type, title, description, now, now, external_ticket_ref, affected_user, priority),
+            "external_ticket_ref, affected_user, priority, suggested_steps_json) "
+            "VALUES (?, ?, ?, 'open', ?, ?, ?, ?, ?, ?)",
+            (alert_type, title, description, now, now, external_ticket_ref, affected_user, priority, steps_json),
         )
         conn.commit()
         row = conn.execute("SELECT * FROM incidents WHERE id = ?", (cursor.lastrowid,)).fetchone()
@@ -182,6 +200,31 @@ def _set_checklist_item_sync(db_path: str, incident_id: int, item: str, checked:
         now = datetime.now(timezone.utc).isoformat()
         conn.execute(
             "UPDATE incidents SET checklist_json = ?, updated_at = ? WHERE id = ?",
+            (json.dumps(current), now, incident_id),
+        )
+        conn.commit()
+        return True
+    finally:
+        conn.close()
+
+
+def _set_suggested_step_sync(db_path: str, incident_id: int, category: str, step_text: str, checked: bool) -> bool:
+    import json
+    conn = _connect(db_path)
+    try:
+        row = conn.execute("SELECT suggested_steps_json FROM incidents WHERE id = ?", (incident_id,)).fetchone()
+        if row is None:
+            return False
+        current = json.loads(row["suggested_steps_json"]) if row["suggested_steps_json"] else {}
+        items = current.get(category, [])
+        if checked and step_text not in items:
+            items.append(step_text)
+        elif not checked and step_text in items:
+            items.remove(step_text)
+        current[category] = items
+        now = datetime.now(timezone.utc).isoformat()
+        conn.execute(
+            "UPDATE incidents SET suggested_steps_json = ?, updated_at = ? WHERE id = ?",
             (json.dumps(current), now, incident_id),
         )
         conn.commit()
@@ -509,13 +552,22 @@ class TrackerDB:
 
     async def create_incident(self, alert_type: str, title: str, description: str | None = None,
                                external_ticket_ref: str | None = None, affected_user: str | None = None,
-                               priority: str = "medium") -> dict:
+                               priority: str = "medium", suggested_steps: dict | None = None) -> dict:
         if priority not in VALID_PRIORITIES:
             raise ValueError(f"Invalid priority {priority!r} - must be one of {VALID_PRIORITIES}")
+        if suggested_steps:
+            unknown = set(suggested_steps) - set(SUGGESTED_STEP_CATEGORIES)
+            if unknown:
+                raise ValueError(f"Invalid suggested_steps categories {unknown} - must be one of {SUGGESTED_STEP_CATEGORIES}")
         return await asyncio.to_thread(
             _create_incident_sync, self.db_path, alert_type, title, description, external_ticket_ref,
-            affected_user, priority,
+            affected_user, priority, suggested_steps,
         )
+
+    async def set_suggested_step(self, incident_id: int, category: str, step_text: str, checked: bool) -> bool:
+        if category not in SUGGESTED_STEP_CATEGORIES:
+            raise ValueError(f"Invalid suggested_steps category {category!r} - must be one of {SUGGESTED_STEP_CATEGORIES}")
+        return await asyncio.to_thread(_set_suggested_step_sync, self.db_path, incident_id, category, step_text, checked)
 
     async def set_priority(self, incident_id: int, priority: str) -> bool:
         if priority not in VALID_PRIORITIES:

@@ -485,6 +485,51 @@ def test_docs_disabled_by_default(client):
     assert client.get("/openapi.json").status_code == 404
 
 
+def test_create_incident_accepts_suggested_steps(client):
+    _login(client)
+    resp = client.post("/api/incidents", json={
+        "alert_type": "Phishing", "title": "test",
+        "suggested_steps": {"investigation": ["Checked sender domain"]},
+    })
+    assert resp.status_code == 200
+    assert resp.json()["incident"]["suggested_steps"]["investigation"] == ["Checked sender domain"]
+
+
+def test_set_suggested_step_requires_auth(client):
+    resp = client.post("/api/incidents/1/suggested-steps", json={
+        "category": "findings", "step_text": "x", "checked": True,
+    })
+    assert resp.status_code == 401
+
+
+def test_set_suggested_step_updates_incident(client):
+    _login(client)
+    created = client.post("/api/incidents", json={"alert_type": "Phishing", "title": "test"}).json()["incident"]
+    resp = client.post(f"/api/incidents/{created['id']}/suggested-steps", json={
+        "category": "action", "step_text": "Blocked sender", "checked": True,
+    })
+    assert resp.status_code == 200
+    fetched = client.get(f"/api/incidents/{created['id']}").json()["incident"]
+    assert fetched["suggested_steps"]["action"] == ["Blocked sender"]
+
+
+def test_set_suggested_step_invalid_category_rejected(client):
+    _login(client)
+    created = client.post("/api/incidents", json={"alert_type": "Phishing", "title": "test"}).json()["incident"]
+    resp = client.post(f"/api/incidents/{created['id']}/suggested-steps", json={
+        "category": "bogus", "step_text": "x", "checked": True,
+    })
+    assert resp.status_code == 400
+
+
+def test_set_suggested_step_nonexistent_incident_404(client):
+    _login(client)
+    resp = client.post("/api/incidents/99999/suggested-steps", json={
+        "category": "notes", "step_text": "x", "checked": True,
+    })
+    assert resp.status_code == 404
+
+
 def test_create_incident_rejects_non_json_body(client):
     """FastAPI's own Pydantic body parsing already requires valid JSON
     matching the schema - a plain cross-site <form> POST can't produce
